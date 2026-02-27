@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include "apkm.h"
 #include "sandbox.h"
+#include <sys/stat.h>  // pour mkdir, chmod
+
 
 /**
  * APKM v0.1 - The Gopu.inc Smart Package Manager
