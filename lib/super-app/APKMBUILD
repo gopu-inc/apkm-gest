@@ -1,0 +1,18 @@
+$APKNAME::super-app
+$APKMVERSION::2.1.0
+$APKMRELEASE::r1
+$APKMARCH::x86_64
+$APKMMAINT::Mauricio <mauricio@email.com>
+$APKMDESC::Une super application avec plein de features
+$APKMLICENSE::GPL-3.0
+$APKMURL::https://github.com/gopu-inc/super-app
+$APKMDEP:: { libc; gcc; make; }
+$APKMMAKE:: {
+    make;
+}
+$APKMCHECK:: {
+    make test;
+}
+$APKMINSTALL:: {
+    make install DESTDIR="$pkgdir";
+}

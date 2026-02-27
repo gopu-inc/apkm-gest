@@ -1,0 +1,12 @@
+super-app v2.1.0
+================
+Une super application avec plein de features
+
+Installation: /usr/local/bin/super-app
+Documentation: /usr/local/share/doc/super-app/README
+
+Utilisation:
+  super-app                 # Mode normal
+  super-app --help          # Afficher l'aide
+  super-app --version       # Afficher la version
+  super-app --test          # Mode test
