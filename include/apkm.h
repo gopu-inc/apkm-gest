@@ -172,10 +172,10 @@ int apkm_token_encrypt(const char* token);
 int apkm_token_validate(const char* token);
 void apkm_crypto_process(char* data, size_t len, bool encrypt);
 
-// Sandbox et isolation
-int apkm_sandbox_create(const char* path, bool network, bool mount);
-int apkm_sandbox_destroy(const char* path);
-int apkm_sandbox_exec(const char* sandbox, const char* command);
+// Sandbox et isolation - CORRIGÉ pour correspondre à sandbox.c
+int apkm_sandbox_init(const char *target_path);
+int apkm_sandbox_create(const char* path, int enable_network, int enable_mount);
+int apkm_sandbox_lockdown(void);
 
 // Threading et parallélisation
 int apkm_set_threads(int count);
@@ -187,5 +187,9 @@ void apkm_set_log_level(int level);
 void apkm_set_log_file(const char* path);
 void apkm_enable_trace(bool enable);
 void apkm_dump_state(const char* file);
+
+// Fonctions Alpine spécifiques
+void sync_alpine_db(output_format_t format);
+void resolve_dependencies(const char *staging_path);
 
 #endif // APKM_H
