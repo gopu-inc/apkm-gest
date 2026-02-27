@@ -5,6 +5,7 @@
 #include <openssl/kdf.h>
 #include <argon2.h>
 #include <blake3.h>
+#include <string.h>
 
 // Chiffrement AES-256-GCM avec authentification
 int aes256_gcm_encrypt(const unsigned char* plaintext, size_t plaintext_len,

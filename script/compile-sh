@@ -1,0 +1,47 @@
+#!/bin/sh
+# compile.sh
+
+echo "🔧 Compilation d'APKM (version simplifiée)..."
+
+# Créer les répertoires
+mkdir -p obj bin
+
+# Définir les flags
+CFLAGS="-m32 -Iinclude -Wall -O2"
+LDFLAGS="-m32"
+LIBS="-lcurl -lsqlite3 -lssl -lcrypto -lz -lpthread -lrt -ldl -lm -lsodium -lseccomp -lcap-ng -larchive -llz4 -lzstd -lyaml -ljansson -largon2 -ltoml"
+
+# Compiler chaque fichier source (sauf monitoring.c et parallel.c)
+for src in src/*.c; do
+    # Ignorer les fichiers exclus
+    case "$src" in
+        *monitoring.c|*parallel.c|*bool.c)
+            echo "⏭️  Ignoré: $src"
+            continue
+            ;;
+    esac
+    
+    obj="obj/$(basename ${src%.c}).o"
+    echo "🛠️  Compilation: $src -> $obj"
+    gcc $CFLAGS -c $src -o $obj
+    if [ $? -ne 0 ]; then
+        echo "❌ Erreur de compilation: $src"
+        exit 1
+    fi
+done
+
+# Linker
+echo "🔗 Linkage final..."
+gcc $LDFLAGS -o bin/apkm obj/*.o $LIBS
+
+if [ $? -eq 0 ]; then
+    echo "✅ Compilation réussie !"
+    ls -lh bin/apkm
+    file bin/apkm
+else
+    echo "❌ Échec du linkage"
+    exit 1
+fi
+
+echo ""
+echo "📦 Pour exécuter : ./bin/apkm --help"

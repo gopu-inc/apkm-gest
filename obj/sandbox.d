@@ -1,1 +1,1 @@
-obj/sandbox.o: src/sandbox.c include/apkm.h
+obj/sandbox.o: src/sandbox.c include/sandbox.h
