@@ -7,7 +7,7 @@
 #include <sys/eventfd.h>
 #include <sys/inotify.h>
 #include <sys/prctl.h>
-#include <sys/capability.h>
+#include <cap-ng.h>
 #include <sys/xattr.h>
 #include <sys/fanotify.h>
 #include <linux/seccomp.h>
