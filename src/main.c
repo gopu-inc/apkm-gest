@@ -28,42 +28,52 @@ void print_help(void) {
 }
 
 // Fonction de "Déboolage" et Installation
+// Version sans sandbox qui fonctionne
 void apkm_install_bool(const char *filepath) {
     printf("[APKM] 📦 Préparation de l'installation : %s\n", filepath);
 
-    // 1. Initialisation de la Sandbox sécurisée
-    const char *staging_path = "/tmp/apkm_staging";
-    if (apkm_sandbox_init(staging_path) != 0) {
-        fprintf(stderr, "[APKM] ❌ Erreur : Impossible de créer la sandbox.\n");
-        return;
-    }
+    // Utiliser /tmp directement au lieu de la sandbox
+    const char *staging_path = "/tmp/apkm_install";
+    
+    // Créer le répertoire temporaire
+    mkdir(staging_path, 0755);
+    
+    // Vider le répertoire s'il existe déjà
+    char cmd_clean[512];
+    snprintf(cmd_clean, sizeof(cmd_clean), "rm -rf %s/*", staging_path);
+    system(cmd_clean);
 
-    // 2. Extraction du format propriétaire .tar.bool
-    printf("[APKM] 🔍 Débooleur en cours (extraction isolée)...\n");
+    // 2. Extraction du fichier .tar.bool
+    printf("[APKM] 🔍 Extraction en cours...\n");
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "tar -xzf %s -C %s", filepath, staging_path);
     
     if (system(cmd) != 0) {
-        fprintf(stderr, "[APKM] ❌ Erreur lors du débooleur.\n");
-        umount(staging_path);
+        fprintf(stderr, "[APKM] ❌ Erreur lors de l'extraction.\n");
         return;
     }
     
-    // Résolution des dépendances (fonction déclarée dans apkm.h)
+    // Résolution des dépendances
     resolve_dependencies(staging_path);
     
-    // 3. Exécution du script d'installation
-    printf("[APKM] ⚙️ Exécution du script d'installation...\n");
+    // 3. Exécution du script d'installation s'il existe
     char script_path[512];
-    snprintf(script_path, sizeof(script_path), "sh %s/install.sh", staging_path);
-    system(script_path);
-
-    // 4. Gestion des Refs
-    printf("[APKM] ⚓ Création d'une nouvelle ref dans /var/lib/apkm/refs/\n");
+    snprintf(script_path, sizeof(script_path), "%s/install.sh", staging_path);
     
-    // Nettoyage final
-    umount(staging_path);
-    printf("[APKM] ✅ Installation terminée avec succès.\n");
+    if (access(script_path, F_OK) == 0) {
+        printf("[APKM] ⚙️ Exécution du script d'installation...\n");
+        chmod(script_path, 0755);
+        system(script_path);
+    } else {
+        printf("[APKM] ⚠️ Aucun script install.sh trouvé\n");
+    }
+
+    // 4. Nettoyage
+    printf("[APKM] 🧹 Nettoyage...\n");
+    snprintf(cmd_clean, sizeof(cmd_clean), "rm -rf %s", staging_path);
+    system(cmd_clean);
+    
+    printf("[APKM] ✅ Installation terminée !\n");
 }
 
 int main(int argc, char *argv[]) {
