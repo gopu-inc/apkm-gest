@@ -8,7 +8,7 @@ LDFLAGS = -lsqlite3 -lcurl
 
 # Dossiers
 SRC_DIR = src
-OBJ_DIR = src
+OBJ_DIR = obj
 
 # Objets communs (Sécurité, Auth, Database)
 COMMON_OBJS = $(OBJ_DIR)/auth.o \
