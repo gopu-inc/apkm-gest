@@ -10,7 +10,7 @@
  * APKM v0.1 - The Gopu.inc Smart Package Manager
  */
 
-void print_help() {
+void print_help(void) {
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     printf("  APKM - Advanced Package Manager (Gopu.inc Edition)\n");
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
@@ -48,16 +48,17 @@ void apkm_install_bool(const char *filepath) {
         umount(staging_path);
         return;
     }
-        resolve_dependencies(staging_path);
-    // 3. Exécution du script d'installation Gopu (Smart Logic)
+    
+    // Résolution des dépendances (fonction déclarée dans apkm.h)
+    resolve_dependencies(staging_path);
+    
+    // 3. Exécution du script d'installation
     printf("[APKM] ⚙️ Exécution du script d'installation...\n");
     char script_path[512];
     snprintf(script_path, sizeof(script_path), "sh %s/install.sh", staging_path);
-    
-    // Ici, on pourrait ajouter la vérification du APKMSHA avant d'exécuter
     system(script_path);
 
-    // 4. Gestion des Refs (Snapshot de l'installation)
+    // 4. Gestion des Refs
     printf("[APKM] ⚓ Création d'une nouvelle ref dans /var/lib/apkm/refs/\n");
     
     // Nettoyage final
@@ -97,7 +98,7 @@ int main(int argc, char *argv[]) {
     } 
     else if (strcmp(command, "rollback") == 0) {
         printf("[APKM] ⏪ Restauration vers la version précédente...\n");
-        // Logique rollback via les refs
+        // Logique rollback
     } 
     else {
         fprintf(stderr, "[APKM] Commande inconnue : %s\n", command);
@@ -106,4 +107,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
