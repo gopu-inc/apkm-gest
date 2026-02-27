@@ -48,7 +48,7 @@ void apkm_install_bool(const char *filepath) {
         umount(staging_path);
         return;
     }
-
+        resolve_dependencies(staging_path);
     // 3. Exécution du script d'installation Gopu (Smart Logic)
     printf("[APKM] ⚙️ Exécution du script d'installation...\n");
     char script_path[512];
