@@ -1,16 +1,13 @@
 $APKNAME::super-app
-$APKMVERSION::1.0.0
+$APKMVERSION::1.9.0
 $APKMRELEASE::r1
 $APKMARCH::x86_64
 $APKMMAINT::Mauricio <mauricio@email.com>
-$APKMDESC::Bibliothèque exemple avec includes et libs
-$APKMLICENSE::MIT
-$APKMURL::https://github.com/gopu-inc/libexample
-$APKMDEP:: gcc; make
-$APKMPATH::install.sh
-$APKMINCLUDES::include
-$APKMLIBS::lib
-$APKMPKGCONFIG::lib/pkgconfig
-$APKMMAKE:: make
-$APKMCHECK:: make test
-$APKMINSTALL:: make install DESTDIR="$DESTDIR"
+$APKMDESC::Super application avec documentation
+$APKMLICENSE::GPL-3.0
+$APKMDOC::[%OPEN+==README.md]
+# Documentation complète de super-app
+
+## Installation
+```bash
+apkm install super

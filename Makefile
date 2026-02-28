@@ -5,7 +5,7 @@ LDFLAGS = -m32 -L/usr/local/lib
 # Bibliothèques de base disponibles sur Alpine
 LIBS = -lcurl -lsqlite3 -lssl -lcrypto -lz -lpthread -lrt -ldl -lm
 LIBS += -lsodium -larchive -llz4 -lzstd -lyaml -ljansson -largon2
-LIBS += -lblake3  # Ajout de BLAKE3
+LIBS += -lblake3 -ljson-c # Ajout de BLAKE3
 
 SRCDIR = src
 OBJDIR = obj

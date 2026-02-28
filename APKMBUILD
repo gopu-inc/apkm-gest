@@ -1,17 +1,17 @@
-'' APKMBUILD pour gopu-inc
 $APKNAME::apkm
-$APKMTYPE::GCC
-$APKMVERSION::1.2.0-r0
-$APKMSHA::a1b2c3d4e5f6
-
-$APKMDEP::
-{
-    sqlite-dev;
-    gdbm;
-}
-
-APKMSCRIPT::
-{
-    SED[install.sh]
-}
-
+$APKMVERSION::2.0.0
+$APKMRELEASE::r1
+$APKMARCH::x86_64
+$APKMMAINT::Mauricio <mauricio@email.com>
+$APKMDESC::Advanced Package Manager - Gopu.inc Edition
+$APKMLICENSE::MIT
+$APKMURL::https://github.com/gopu-inc/apkm-gest
+$APKMDEP:: gcc; make; curl-dev; openssl-dev; sqlite-dev; libarchive-dev
+$APKMPATH::install.sh
+$APKMDOC::[%OPEN+==README.md]
+$APKMINCLUDES::include
+$APKMLIBS::lib
+$APKMPKGCONFIG::lib/pkgconfig
+$APKMMAKE:: make
+$APKMCHECK:: make test
+$APKMINSTALL:: make install DESTDIR="$DESTDIR"
