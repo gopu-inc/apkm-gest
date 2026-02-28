@@ -9,15 +9,11 @@
 #include <time.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/rsa.h>
 
-#define BOOL_MAGIC "00012x0 0032000 bool APKM"
 #define BOOL_VERSION "2.1.0"
-#define SIGNATURE_SIZE 512
+#define SIGNATURE_SIZE 128
 
 typedef struct {
-    char magic[32];           // Signature magique pour head
     char name[128];
     char version[64];
     char release[16];
@@ -89,43 +85,11 @@ int calculate_file_sha256(const char *filepath, char *output) {
     return 0;
 }
 
-// Créer une signature simple
-void create_signature(apkm_build_t *b, const char *private_key) {
-    // Paramètre unused pour éviter warning
-    (void)private_key;
-    
-    char data_to_sign[4096] = "";
-    
-    // Concaténer les infos importantes
-    snprintf(data_to_sign, sizeof(data_to_sign),
-             "%s|%s|%s|%s|%s|%s|%s|%lld",
-             b->name, b->version, b->release, b->arch,
-             b->maintainer, b->sha256, b->build_date,
-             (long long)time(NULL));
-    
-    // Pour l'instant, signature simulée
-    // Dans une version réelle, utiliser RSA ou GPG
-    snprintf(b->signature, SIGNATURE_SIZE,
-             "BOOLSIG:%s:%s:%s",
-             b->name, b->version, b->sha256);
-    
-    printf("[BOOL] 🔏 Signature créée: %.32s...\n", b->signature);
-}
-
-// Vérifier la signature
-int verify_signature(apkm_build_t *b) {
-    // Vérification simple
-    if (strstr(b->signature, "BOOLSIG:") != b->signature) {
-        return -1;
-    }
-    return 0;
-}
-
 // Parser le fichier APKMBUILD
 void parse_apkmbuild(const char *filename, apkm_build_t *b) {
     FILE *fp = fopen(filename, "r");
     if (!fp) {
-        perror("[BOOL] Erreur");
+        perror("[BOOL] Error");
         exit(1);
     }
 
@@ -133,9 +97,8 @@ void parse_apkmbuild(const char *filename, apkm_build_t *b) {
     int in_block = 0;
     char current_block[1024] = "";
     
-    // Initialisation avec le magic header
+    // Initialisation
     memset(b, 0, sizeof(apkm_build_t));
-    strcpy(b->magic, BOOL_MAGIC);
     strcpy(b->arch, "x86_64");
     strcpy(b->release, "r0");
     strcpy(b->script_path, "install.sh");
@@ -279,7 +242,7 @@ int create_package_structure(apkm_build_t *b, const char *build_dir) {
     snprintf(path, sizeof(path), "%s/usr/lib/pkgconfig", pkg_dir);
     mkdir(path, 0755);
     
-    printf("[BOOL] 📦 Copie des fichiers du projet...\n");
+    printf("[BOOL] 📦 Copying project files...\n");
     
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), 
@@ -287,37 +250,34 @@ int create_package_structure(apkm_build_t *b, const char *build_dir) {
              pkg_dir);
     system(cmd);
     
-    // Ajouter le fichier de signature
-    char sig_path[512];
-    snprintf(sig_path, sizeof(sig_path), "%s/.BOOL.sig", pkg_dir);
-    FILE *sig = fopen(sig_path, "w");
-    if (sig) {
-        fprintf(sig, "MAGIC=%s\n", BOOL_MAGIC);
-        fprintf(sig, "NAME=%s\n", b->name);
-        fprintf(sig, "VERSION=%s\n", b->version);
-        fprintf(sig, "RELEASE=%s\n", b->release);
-        fprintf(sig, "SHA256=%s\n", b->sha256);
-        fprintf(sig, "SIGNATURE=%s\n", b->signature);
-        fprintf(sig, "BUILD_DATE=%s\n", b->build_date);
-        fprintf(sig, "BUILD_HOST=%s\n", b->build_host);
-        fclose(sig);
-    }
-    
     return 0;
 }
 
-// Créer l'en-tête magique pour la commande head
-void create_magic_header(apkm_build_t *b, FILE *archive) {
-    // L'en-tête sera ajouté au début de l'archive
-    // Quand on fait "head -1 fichier.tar.bool", on voit le magic
-    fprintf(archive, "%s\n", BOOL_MAGIC);
-    fprintf(archive, "# Package: %s %s-%s\n", b->name, b->version, b->release);
-    fprintf(archive, "# Architecture: %s\n", b->arch);
-    fprintf(archive, "# SHA256: %s\n", b->sha256);
-    fprintf(archive, "# Signature: %s\n", b->signature);
-    fprintf(archive, "# Build: %s on %s\n", b->build_date, b->build_host);
-    fprintf(archive, "# This is a BOOL APKM package\n");
-    fprintf(archive, "#%010ld\n", (long)time(NULL));
+// Créer un fichier de signature séparé
+void create_signature_file(apkm_build_t *b, const char *pkg_dir) {
+    char sig_path[512];
+    snprintf(sig_path, sizeof(sig_path), "%s/.BOOL.sig", pkg_dir);
+    
+    FILE *sig = fopen(sig_path, "w");
+    if (!sig) return;
+    
+    fprintf(sig, "# BOOL Signature File\n");
+    fprintf(sig, "# Generated: %s\n", b->build_date);
+    fprintf(sig, "# Host: %s\n", b->build_host);
+    fprintf(sig, "\n");
+    fprintf(sig, "NAME=%s\n", b->name);
+    fprintf(sig, "VERSION=%s\n", b->version);
+    fprintf(sig, "RELEASE=%s\n", b->release);
+    fprintf(sig, "ARCH=%s\n", b->arch);
+    fprintf(sig, "MAINTAINER=%s\n", b->maintainer);
+    fprintf(sig, "DESCRIPTION=%s\n", b->description);
+    fprintf(sig, "LICENSE=%s\n", b->license);
+    fprintf(sig, "SHA256=%s\n", b->sha256);
+    fprintf(sig, "SIGNATURE=%s\n", b->signature);
+    fprintf(sig, "DEPENDENCIES=%s\n", b->deps);
+    
+    fclose(sig);
+    printf("[BOOL] 🔏 Signature file created: .BOOL.sig\n");
 }
 
 // Builder le paquet
@@ -326,139 +286,145 @@ int build_package(apkm_build_t *b) {
     printf("  BOOL - APKM Package Builder v%s\n", BOOL_VERSION);
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
     
-    printf("📦 INFORMATIONS DU PAQUET:\n");
-    printf("  • Magic header : %s\n", BOOL_MAGIC);
-    printf("  • Nom          : %s\n", b->name);
+    printf("📦 PACKAGE INFORMATION:\n");
+    printf("  • Name         : %s\n", b->name);
     printf("  • Version      : %s-%s\n", b->version, b->release);
     printf("  • Architecture : %s\n", b->arch);
     printf("  • Script path  : %s\n", b->script_path);
-    printf("  • Date build   : %s\n", b->build_date);
+    printf("  • Build date   : %s\n", b->build_date);
     
-    // Étape 1: Build
+    // Step 1: Build
     if (strlen(b->build_cmd) > 0) {
-        printf("\n🔧 ÉTAPE BUILD:\n");
-        printf("  • Exécution: %s\n", b->build_cmd);
+        printf("\n🔧 BUILD STEP:\n");
+        printf("  • Executing: %s\n", b->build_cmd);
         if (system(b->build_cmd) != 0) {
-            printf("[BOOL] ⚠️  Build non bloquant\n");
+            printf("[BOOL] ⚠️ Build non-blocking\n");
         }
     }
     
-    // Étape 2: Tests
+    // Step 2: Tests
     if (strlen(b->check_cmd) > 0) {
-        printf("\n🧪 ÉTAPE TESTS:\n");
-        printf("  • Exécution: %s\n", b->check_cmd);
+        printf("\n🧪 TEST STEP:\n");
+        printf("  • Executing: %s\n", b->check_cmd);
         system(b->check_cmd);
     }
     
-    // Étape 3: Création de la structure
-    printf("\n📁 PRÉPARATION DU PAQUET:\n");
+    // Step 3: Create package structure
+    printf("\n📁 PACKAGE PREPARATION:\n");
     create_package_structure(b, ".");
     
-    // Étape 4: Installation simulée
+    // Step 4: Installation
     if (strlen(b->install_cmd) > 0) {
-        printf("\n⚙️  ÉTAPE INSTALL:\n");
+        printf("\n⚙️ INSTALL STEP:\n");
         char destdir[512];
         snprintf(destdir, sizeof(destdir), "pkg-%s", b->name);
         setenv("DESTDIR", destdir, 1);
         printf("  • DESTDIR=%s\n", destdir);
-        printf("  • Commande: %s\n", b->install_cmd);
+        printf("  • Command: %s\n", b->install_cmd);
         system(b->install_cmd);
     }
     
-    // Étape 5: Calculer SHA256
-    printf("\n🔐 CALCUL DE L'EMPREINTE:\n");
-    char package_path[512];
-    snprintf(package_path, sizeof(package_path), "pkg-%s", b->name);
+    // Step 5: Create signature file
+    strcpy(b->sha256, "pending");
+    create_signature_file(b, "pkg-" b->name);
     
-    // Pour l'instant, on calcule sur un fichier temporaire
-    // Le vrai SHA256 sera calculé sur l'archive finale
-    strcpy(b->sha256, "calcul_en_cours");
-    
-    // Étape 6: Créer la signature
-    create_signature(b, NULL);
-    
-    // Étape 7: Création de l'archive avec en-tête
-    printf("\n📦 CRÉATION DE L'ARCHIVE SIGNÉE:\n");
+    // Step 6: Create final archive
+    printf("\n📦 CREATING FINAL ARCHIVE:\n");
     
     char archive_name[512];
     snprintf(archive_name, sizeof(archive_name), 
              "build/%s-v%s-%s.%s.tar.bool", 
              b->name, b->version, b->release, b->arch);
     
-    // Créer un fichier temporaire avec l'en-tête
-    char temp_archive[512];
-    snprintf(temp_archive, sizeof(temp_archive), "/tmp/%s-temp.tar", b->name);
-    
-    // Créer l'archive sans en-tête d'abord
+    // Use tar with compression - this creates a valid tar.gz
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), 
-             "cd pkg-%s && tar -cf %s * && cd ..", 
-             b->name, temp_archive);
-    system(cmd);
+             "cd pkg-%s && tar -czf ../../%s * && cd ../..", 
+             b->name, archive_name);
     
-    // Ajouter l'en-tête au début
-    FILE *final = fopen(archive_name, "w");
-    if (final) {
-        create_magic_header(b, final);
-        
-        // Ajouter le contenu de l'archive
-        FILE *temp = fopen(temp_archive, "r");
-        if (temp) {
-            char buffer[8192];
-            size_t bytes;
-            while ((bytes = fread(buffer, 1, sizeof(buffer), temp)) > 0) {
-                fwrite(buffer, 1, bytes, final);
-            }
-            fclose(temp);
-        }
-        fclose(final);
-        
-        // Calculer le vrai SHA256
+    if (system(cmd) == 0) {
+        // Calculate SHA256 of final archive
         calculate_file_sha256(archive_name, b->sha256);
         
-        // Mettre à jour l'en-tête avec le SHA256 réel
-        // Pour l'instant, on recrée l'archive
-        printf("[BOOL] 🔏 SHA256 final: %s\n", b->sha256);
-        
-        // Obtenir la taille
+        // Get file size
         struct stat st;
         stat(archive_name, &st);
         b->file_size = st.st_size;
         
-        printf("  ✅ Archive créée: %s (%.2f KB)\n", 
+        printf("  ✅ Archive created: %s (%.2f KB)\n", 
                archive_name, st.st_size / 1024.0);
+        printf("  🔏 SHA256: %.32s...\n", b->sha256);
         
-        // Nettoyage
-        unlink(temp_archive);
+        // Create a separate signature file
+        char sig_file[512];
+        snprintf(sig_file, sizeof(sig_file), "%s.sha256", archive_name);
+        FILE *sf = fopen(sig_file, "w");
+        if (sf) {
+            fprintf(sf, "%s  %s\n", b->sha256, archive_name);
+            fclose(sf);
+            printf("  📄 SHA256 file created: %s.sha256\n", archive_name);
+        }
+        
+        // Create manifest
+        char manifest[512];
+        snprintf(manifest, sizeof(manifest), "build/%s.manifest", b->name);
+        FILE *mf = fopen(manifest, "w");
+        if (mf) {
+            fprintf(mf, "NAME=%s\n", b->name);
+            fprintf(mf, "VERSION=%s\n", b->version);
+            fprintf(mf, "RELEASE=%s\n", b->release);
+            fprintf(mf, "ARCH=%s\n", b->arch);
+            fprintf(mf, "SHA256=%s\n", b->sha256);
+            fprintf(mf, "SIZE=%lld\n", (long long)st.st_size);
+            fprintf(mf, "BUILD_DATE=%s\n", b->build_date);
+            fprintf(mf, "BUILD_HOST=%s\n", b->build_host);
+            fprintf(mf, "MAINTAINER=%s\n", b->maintainer);
+            fprintf(mf, "DESCRIPTION=%s\n", b->description);
+            fclose(mf);
+            printf("  📄 Manifest created: %s\n", manifest);
+        }
+        
+        // Cleanup
         snprintf(cmd, sizeof(cmd), "rm -rf pkg-%s", b->name);
         system(cmd);
         
         return 0;
+    } else {
+        printf("  ❌ Failed to create archive\n");
+        return -1;
     }
-    
-    return -1;
 }
 
-// Afficher l'en-tête d'un package
-int show_package_header(const char *filename) {
-    FILE *f = fopen(filename, "r");
-    if (!f) return -1;
-    
-    char line[256];
-    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    printf("  BOOL Package Header\n");
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
-    // Lire les premières lignes
-    for (int i = 0; i < 10 && fgets(line, sizeof(line), f); i++) {
-        if (i == 0) {
-            printf("🔮 Magic: %s", line);
-        } else {
-            printf("  %s", line);
-        }
+// Show package info from manifest
+int show_package_info(const char *package_path) {
+    // Check if it's a valid tar.gz
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "file %s | grep -q 'gzip compressed data'", package_path);
+    if (system(cmd) != 0) {
+        printf("[BOOL] ❌ Not a valid gzip archive\n");
+        return -1;
     }
     
-    fclose(f);
+    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("  BOOL Package Information\n");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    
+    // Show file info
+    struct stat st;
+    stat(package_path, &st);
+    printf("  📦 File: %s\n", package_path);
+    printf("  📏 Size: %.2f KB\n", st.st_size / 1024.0);
+    
+    // Calculate SHA256
+    char sha256[128];
+    if (calculate_file_sha256(package_path, sha256) == 0) {
+        printf("  🔏 SHA256: %.32s...\n", sha256);
+    }
+    
+    // Try to extract and show .BOOL.sig if exists
+    printf("\n  📋 To see contents: tar -tzf %s\n", package_path);
+    printf("  🔍 To extract: tar -xzf %s\n", package_path);
+    
     return 0;
 }
 
@@ -468,13 +434,14 @@ int main(int argc, char *argv[]) {
         printf("  BOOL - APKM Package Builder v%s\n", BOOL_VERSION);
         printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
         printf("Usage:\n");
-        printf("  bool --build              Construire le paquet depuis APKMBUILD\n");
-        printf("  bool --header <fichier>   Afficher l'en-tête d'un package\n");
-        printf("  bool --verify <fichier>   Vérifier la signature\n");
-        printf("  bool --help                Afficher cette aide\n\n");
-        printf("Exemple:\n");
-        printf("  head -1 mon-app-v1.0.0-r1.x86_64.tar.bool\n");
-        printf("  > %s\n", BOOL_MAGIC);
+        printf("  bool --build                 Build package from APKMBUILD\n");
+        printf("  bool --info <package>        Show package information\n");
+        printf("  bool --verify <package>      Verify package integrity\n");
+        printf("  bool --help                   Show this help\n\n");
+        printf("Examples:\n");
+        printf("  bool --build\n");
+        printf("  bool --info build/package.tar.bool\n");
+        printf("  sha256sum build/package.tar.bool  # Verify signature\n");
         return 0;
     }
     
@@ -485,41 +452,65 @@ int main(int argc, char *argv[]) {
         parse_apkmbuild("APKMBUILD", &build_info);
         
         if (build_package(&build_info) == 0) {
-            printf("\n[BOOL] ✅ Build terminé avec succès!\n");
-            printf("[BOOL] 📦 Pour voir l'en-tête: head -1 build/%s-v%s-%s.%s.tar.bool\n",
+            printf("\n[BOOL] ✅ Build completed successfully!\n");
+            printf("[BOOL] 📦 Package: build/%s-v%s-%s.%s.tar.bool\n",
+                   build_info.name, build_info.version, 
+                   build_info.release, build_info.arch);
+            printf("[BOOL] 🔏 SHA256: cat build/%s-v%s-%s.%s.tar.bool.sha256\n",
                    build_info.name, build_info.version, 
                    build_info.release, build_info.arch);
         } else {
-            printf("\n[BOOL] ❌ Échec du build\n");
+            printf("\n[BOOL] ❌ Build failed\n");
             return 1;
         }
     }
-    else if (strcmp(argv[1], "--header") == 0) {
+    else if (strcmp(argv[1], "--info") == 0) {
         if (argc < 3) {
-            printf("[BOOL] ❌ Spécifiez un fichier\n");
+            printf("[BOOL] ❌ Specify a package file\n");
             return 1;
         }
-        show_package_header(argv[2]);
+        show_package_info(argv[2]);
     }
     else if (strcmp(argv[1], "--verify") == 0) {
         if (argc < 3) {
-            printf("[BOOL] ❌ Spécifiez un fichier\n");
+            printf("[BOOL] ❌ Specify a package file\n");
             return 1;
         }
-        printf("[BOOL] 🔍 Vérification de %s...\n", argv[2]);
-        // Logique de vérification
-        show_package_header(argv[2]);
+        printf("[BOOL] 🔍 Verifying %s...\n", argv[2]);
+        
+        // Check if SHA256 file exists
+        char sha256_file[512];
+        snprintf(sha256_file, sizeof(sha256_file), "%s.sha256", argv[2]);
+        
+        if (access(sha256_file, F_OK) == 0) {
+            char cmd[1024];
+            snprintf(cmd, sizeof(cmd), "sha256sum -c %s", sha256_file);
+            if (system(cmd) == 0) {
+                printf("[BOOL] ✅ Package verified successfully\n");
+            } else {
+                printf("[BOOL] ❌ Package verification failed\n");
+            }
+        } else {
+            // Just calculate SHA256
+            char sha256[128];
+            if (calculate_file_sha256(argv[2], sha256) == 0) {
+                printf("[BOOL] 🔏 SHA256: %s\n", sha256);
+                printf("[BOOL] ⚠️ No signature file found\n");
+            }
+        }
     }
     else if (strcmp(argv[1], "--help") == 0) {
+        printf("BOOL - APKM Package Builder v%s\n", BOOL_VERSION);
         printf("Usage: bool --build\n");
         printf("Options:\n");
-        printf("  --build     Construire le paquet depuis APKMBUILD\n");
-        printf("  --header    Afficher l'en-tête d'un package\n");
-        printf("  --verify    Vérifier la signature\n");
-        printf("  --help      Afficher cette aide\n");
+        printf("  --build     Build package from APKMBUILD\n");
+        printf("  --info      Show package information\n");
+        printf("  --verify    Verify package integrity\n");
+        printf("  --help      Show this help\n");
     }
     else {
-        printf("[BOOL] ❌ Option inconnue: %s\n", argv[1]);
+        printf("[BOOL] ❌ Unknown option: %s\n", argv[1]);
+        printf("Try 'bool --help'\n");
         return 1;
     }
     
