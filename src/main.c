@@ -107,7 +107,25 @@ void apkm_install_bool(const char *filepath) {
     
     printf("[APKM] ✅ Installation terminée !\n");
 }
-
+// Ajouter cette fonction dans src/main.c
+void register_installed_package(const char *pkg_name, const char *version) {
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "/var/lib/apkm/installed.db");
+    
+    FILE *db = fopen(db_path, "a");
+    if (!db) {
+        // Créer le répertoire si nécessaire
+        mkdir("/var/lib/apkm", 0755);
+        db = fopen(db_path, "a");
+    }
+    
+    if (db) {
+        time_t now = time(NULL);
+        fprintf(db, "%s|%s|%ld\n", pkg_name, version, now);
+        fclose(db);
+        printf("[APKM] 📝 Paquet enregistré: %s %s\n", pkg_name, version);
+    }
+}
 int main(int argc, char *argv[]) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0) {
         print_help();
@@ -134,6 +152,27 @@ int main(int argc, char *argv[]) {
         }
         apkm_install_bool(argv[2]);
     } 
+
+  
+else if (strcmp(command, "list") == 0) {
+    printf("[APKM] 📋 Paquets installés:\n");
+    FILE *db = fopen("/var/lib/apkm/installed.db", "r");
+    if (db) {
+        char line[512];
+        while (fgets(line, sizeof(line), db)) {
+            char name[256], version[64];
+            long date;
+            sscanf(line, "%[^|]|%[^|]|%ld", name, version, &date);
+            struct tm *tm = localtime(&date);
+            printf("  • %-20s %-10s (%04d-%02d-%02d)\n", 
+                   name, version, 
+                   tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday);
+        }
+        fclose(db);
+    } else {
+        printf("  Aucun paquet APKM installé\n");
+    }
+}
     else if (strcmp(command, "audit") == 0) {
         printf("[APKM] 🛡️ Analyse CVE et scan d'intégrité...\n");
         // Logique audit
