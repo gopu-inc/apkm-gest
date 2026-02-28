@@ -30,22 +30,18 @@ void print_help(void) {
 }
 
 // Fonction de "Déboolage" et Installation
-// Version sans sandbox qui fonctionne
 void apkm_install_bool(const char *filepath) {
     printf("[APKM] 📦 Préparation de l'installation : %s\n", filepath);
 
-    // Utiliser /tmp directement au lieu de la sandbox
     const char *staging_path = "/tmp/apkm_install";
     
-    // Créer le répertoire temporaire
+    // Créer et vider le répertoire temporaire
     mkdir(staging_path, 0755);
-    
-    // Vider le répertoire s'il existe déjà
     char cmd_clean[512];
     snprintf(cmd_clean, sizeof(cmd_clean), "rm -rf %s/*", staging_path);
     system(cmd_clean);
 
-    // 2. Extraction du fichier .tar.bool
+    // Extraction
     printf("[APKM] 🔍 Extraction en cours...\n");
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "tar -xzf %s -C %s", filepath, staging_path);
@@ -58,19 +54,53 @@ void apkm_install_bool(const char *filepath) {
     // Résolution des dépendances
     resolve_dependencies(staging_path);
     
-    // 3. Exécution du script d'installation s'il existe
-    char script_path[512];
-    snprintf(script_path, sizeof(script_path), "%s/install.sh", staging_path);
+    // Chercher et exécuter le script d'installation
+    printf("[APKM] ⚙️ Recherche du script d'installation...\n");
     
-    if (access(script_path, F_OK) == 0) {
-        printf("[APKM] ⚙️ Exécution du script d'installation...\n");
-        chmod(script_path, 0755);
-        system(script_path);
-    } else {
-        printf("[APKM] ⚠️ Aucun script install.sh trouvé\n");
+    // Liste des scripts possibles
+    const char *scripts[] = {
+        "install.sh",
+        "INSTALL.sh",
+        "post-install.sh",
+        "setup.sh",
+        NULL
+    };
+    
+    int script_found = 0;
+    for (int i = 0; scripts[i] != NULL; i++) {
+        char script_path[512];
+        snprintf(script_path, sizeof(script_path), "%s/%s", staging_path, scripts[i]);
+        
+        if (access(script_path, F_OK) == 0) {
+            printf("[APKM] ⚙️ Exécution de %s...\n", scripts[i]);
+            chmod(script_path, 0755);
+            
+            // Changer de répertoire pour exécuter le script dans le bon contexte
+            char current_dir[1024];
+            getcwd(current_dir, sizeof(current_dir));
+            chdir(staging_path);
+            
+            // Exécuter le script
+            int ret = system(script_path);
+            
+            // Revenir
+            chdir(current_dir);
+            
+            if (ret == 0) {
+                printf("[APKM] ✅ Script exécuté avec succès\n");
+                script_found = 1;
+                break;
+            } else {
+                printf("[APKM] ⚠️ Échec du script %s (code: %d)\n", scripts[i], ret);
+            }
+        }
     }
-
-    // 4. Nettoyage
+    
+    if (!script_found) {
+        printf("[APKM] ⚠️ Aucun script d'installation trouvé\n");
+    }
+    
+    // Nettoyage
     printf("[APKM] 🧹 Nettoyage...\n");
     snprintf(cmd_clean, sizeof(cmd_clean), "rm -rf %s", staging_path);
     system(cmd_clean);
