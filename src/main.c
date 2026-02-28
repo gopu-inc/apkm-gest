@@ -30,7 +30,43 @@ void print_help(void) {
     printf("  -t, --toml  Sortie structurée pour config\n");
     printf("  --help      Affiche ce menu\n\n");
 }
+// Dans src/main.c, modifier la partie extraction:
 
+// Après l'extraction, vérifier si c'est une archive BOOL
+int is_bool_archive(const char *filepath) {
+    FILE *f = fopen(filepath, "r");
+    if (!f) return 0;
+    
+    char magic[256];
+    if (fgets(magic, sizeof(magic), f)) {
+        if (strstr(magic, "00012x0 0032000 bool APKM")) {
+            fclose(f);
+            return 1;
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+// Dans apkm_install_bool, remplacer:
+if (system(cmd) != 0) {
+    // Si échec, essayer de sauter l'en-tête
+    if (is_bool_archive(filepath)) {
+        printf("[APKM] 🔍 Archive BOOL détectée, extraction avec saut d'en-tête...\n");
+        snprintf(cmd, sizeof(cmd), 
+                 "dd if=%s bs=1 skip=512 2>/dev/null | tar -xz -C %s", 
+                 filepath, staging_path);
+        if (system(cmd) == 0) {
+            printf("[APKM] ✅ Extraction réussie\n");
+        } else {
+            fprintf(stderr, "[APKM] ❌ Erreur lors de l'extraction.\n");
+            return;
+        }
+    } else {
+        fprintf(stderr, "[APKM] ❌ Erreur lors de l'extraction.\n");
+        return;
+    }
+}
 void register_installed_package(const char *pkg_name, const char *version, const char *arch) {
     // Créer le répertoire APKM s'il n'existe pas
     mkdir("/var/lib/apkm", 0755);
