@@ -34,6 +34,10 @@ typedef struct {
     char signature[SIGNATURE_SIZE];
     char build_date[32];
     char build_host[128];
+// Dans la structure apkm_build_t, ajouter :
+    char docs[2048];        // Documentation (peut contenir des chemins de fichiers)
+    char readme_path[512];  // Chemin vers le README
+    char doc_content[8192]; // Contenu de la documentation
     long long file_size;
     int dep_count;
     char** deps_array;
@@ -209,6 +213,23 @@ void parse_apkmbuild(const char *filename, apkm_build_t *b) {
             strcpy(b->includes, val + 15);
             clean_string(b->includes);
         }
+            // Dans parse_apkmbuild, ajouter :
+else if ((val = strstr(line, "$APKMDOC::"))) {
+    strcpy(b->docs, val + 10);
+    clean_string(b->docs);
+    
+    // Parser le format spécial [%OPEN+==fichier]
+    char *open_marker = strstr(b->docs, "[%OPEN+==");
+    if (open_marker) {
+        char *file_start = open_marker + 9;
+        char *file_end = strchr(file_start, ']');
+        if (file_end) {
+            int file_len = file_end - file_start;
+            strncpy(b->readme_path, file_start, file_len);
+            b->readme_path[file_len] = '\0';
+        }
+    }
+}
         else if ((val = strstr(line, "$APKMLIBS::"))) {
             strcpy(b->libs, val + 11);
             clean_string(b->libs);
@@ -219,6 +240,46 @@ void parse_apkmbuild(const char *filename, apkm_build_t *b) {
         }
     }
     fclose(fp);
+}
+
+// Dans bool.c, ajouter cette fonction
+char* load_readme_content(const char *readme_path, char *buffer, size_t buffer_size) {
+    FILE *f = fopen(readme_path, "r");
+    if (!f) {
+        // Essayer différents noms
+        const char *alt_paths[] = {
+            "README.md",
+            "README",
+            "readme.md",
+            "Readme.md",
+            "doc/README.md",
+            "docs/README.md",
+            NULL
+        };
+        
+        for (int i = 0; alt_paths[i] != NULL; i++) {
+            f = fopen(alt_paths[i], "r");
+            if (f) break;
+        }
+    }
+    
+    if (!f) {
+        snprintf(buffer, buffer_size, "No documentation found for %s", readme_path);
+        return buffer;
+    }
+    
+    size_t total = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), f) && total < buffer_size - 1) {
+        size_t len = strlen(line);
+        if (total + len < buffer_size - 1) {
+            strcpy(buffer + total, line);
+            total += len;
+        }
+    }
+    fclose(f);
+    
+    return buffer;
 }
 
 // Créer la structure complète du paquet
