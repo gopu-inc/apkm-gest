@@ -91,6 +91,9 @@ int calculate_file_sha256(const char *filepath, char *output) {
 
 // Créer une signature simple
 void create_signature(apkm_build_t *b, const char *private_key) {
+    // Paramètre unused pour éviter warning
+    (void)private_key;
+    
     char data_to_sign[4096] = "";
     
     // Concaténer les infos importantes
@@ -470,7 +473,7 @@ int main(int argc, char *argv[]) {
         printf("  bool --verify <fichier>   Vérifier la signature\n");
         printf("  bool --help                Afficher cette aide\n\n");
         printf("Exemple:\n");
-        echo "  head -1 mon-app-v1.0.0-r1.x86_64.tar.bool\n";
+        printf("  head -1 mon-app-v1.0.0-r1.x86_64.tar.bool\n");
         printf("  > %s\n", BOOL_MAGIC);
         return 0;
     }
