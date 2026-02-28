@@ -7,13 +7,64 @@
 #include <openssl/rsa.h>
 #include <sys/stat.h>
 
+// Initialisation de la sécurité
+int security_init(void) {
+    printf("[SECURITY] 🔐 Initialisation du système de sécurité...\n");
+    
+    // Créer les répertoires un par un
+    mkdir("/usr/local/share/apkm", 0755);
+    mkdir("/usr/local/share/apkm/PROTOCOLE", 0755);
+    mkdir("/usr/local/share/apkm/PROTOCOLE/security", 0755);
+    mkdir("/usr/local/share/apkm/PROTOCOLE/security/keys", 0755);
+    mkdir("/usr/local/share/apkm/PROTOCOLE/security/tokens", 0755);
+    mkdir("/usr/local/share/apkm/PROTOCOLE/security/signatures", 0755);
+    mkdir("/usr/local/share/apkm/PROTOCOLE/security/cache", 0755);
+    mkdir("/usr/local/share/apkm/PROTOCOLE/repository", 0755);
+    mkdir("/usr/local/share/apkm/PROTOCOLE/metadata", 0755);
+    
+    // Vérifier si le token existe, sinon le télécharger
+    if (access(TOKEN_PATH, F_OK) != 0) {
+        security_download_token();
+    }
+    
+    printf("[SECURITY] ✅ Système de sécurité initialisé\n");
+    return 0;
+}
+
+// Calculer SHA256 d'un fichier
+int calculate_sha256(const char *filepath, char *output) {
+    FILE *f = fopen(filepath, "rb");
+    if (!f) {
+        printf("[SECURITY] ❌ Impossible d'ouvrir %s\n", filepath);
+        return -1;
+    }
+    
+    SHA256_CTX ctx;
+    SHA256_Init(&ctx);
+    
+    unsigned char buffer[8192];
+    size_t bytes;
+    
+    while ((bytes = fread(buffer, 1, sizeof(buffer), f)) > 0) {
+        SHA256_Update(&ctx, buffer, bytes);
+    }
+    
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256_Final(hash, &ctx);
+    
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        sprintf(output + (i * 2), "%02x", hash[i]);
+    }
+    output[SHA256_DIGEST_LENGTH * 2] = '\0';
+    
+    fclose(f);
+    printf("[SECURITY] 🔒 SHA256: %.16s...\n", output);
+    return 0;
+}
+
 // Télécharger le token depuis GitHub
 int security_download_token(void) {
     printf("[SECURITY] 📥 Téléchargement du token de sécurité...\n");
-    
-    // Créer les répertoires
-    mkdir(SECURITY_PATH, 0755);
-    mkdir(SECURITY_PATH "/tokens", 0755);
     
     char url[512];
     snprintf(url, sizeof(url), "%s/.config.cfg", REPO_URL);
@@ -24,6 +75,7 @@ int security_download_token(void) {
              TOKEN_PATH, url, TOKEN_PATH, url);
     
     if (system(cmd) == 0 && access(TOKEN_PATH, F_OK) == 0) {
+        chmod(TOKEN_PATH, 0600);
         printf("[SECURITY] ✅ Token téléchargé depuis GitHub\n");
         return 0;
     }
@@ -58,6 +110,7 @@ int security_load_token(security_token_t *token) {
             
             token->last_update = time(NULL);
             token->validated = 1;
+            break;
         }
     }
     fclose(f);
@@ -72,6 +125,7 @@ int security_save_token(const security_token_t *token) {
     // Copier le token pour le chiffrer
     char encrypted_token[512];
     strncpy(encrypted_token, token->token, sizeof(encrypted_token) - 1);
+    encrypted_token[sizeof(encrypted_token) - 1] = '\0';
     
     // Chiffrer
     btscrypt_process(encrypted_token, 1);
@@ -80,37 +134,10 @@ int security_save_token(const security_token_t *token) {
     if (!f) return -1;
     
     fprintf(f, "TOKEN=%s\n", encrypted_token);
-    fprintf(f, "# Generated: %ld\n", token->last_update);
+    fprintf(f, "# Generated: %lld\n", (long long)token->last_update);
     fclose(f);
     
-    chmod(TOKEN_PATH, 0600);  // Permissions strictes
-    return 0;
-}
-
-// Calculer SHA256 d'un fichier
-int calculate_sha256(const char *filepath, char *output) {
-    FILE *f = fopen(filepath, "rb");
-    if (!f) return -1;
-    
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
-    
-    unsigned char buffer[8192];
-    size_t bytes;
-    
-    while ((bytes = fread(buffer, 1, sizeof(buffer), f)) > 0) {
-        SHA256_Update(&ctx, buffer, bytes);
-    }
-    
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256_Final(hash, &ctx);
-    
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        sprintf(output + (i * 2), "%02x", hash[i]);
-    }
-    output[SHA256_DIGEST_LENGTH * 2] = '\0';
-    
-    fclose(f);
+    chmod(TOKEN_PATH, 0600);
     return 0;
 }
 
@@ -118,18 +145,15 @@ int calculate_sha256(const char *filepath, char *output) {
 int security_check_duplicate(const char *package_name, const char *version) {
     char url[512];
     snprintf(url, sizeof(url), 
-             "https://api.github.com/repos/gopu-inc/apkm-gest/contents/%s", 
+             "https://raw.githubusercontent.com/gopu-inc/apkm-gest/master/%s", 
              METADATA_FILE);
     
     // Télécharger le metadata
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), 
-             "curl -s -H 'Accept: application/vnd.github.v3.raw' %s > /tmp/DATA.db 2>/dev/null",
-             url);
-    
-    if (system(cmd) != 0) {
-        return 0; // Pas de metadata, on peut publier
-    }
+             "curl -s %s > /tmp/DATA.db 2>/dev/null || wget -q -O /tmp/DATA.db %s",
+             url, url);
+    system(cmd);
     
     // Lire le fichier
     FILE *f = fopen("/tmp/DATA.db", "r");
@@ -141,23 +165,27 @@ int security_check_duplicate(const char *package_name, const char *version) {
         if (sscanf(line, "%[^|]|%[^|]", name, ver) == 2) {
             if (strcmp(name, package_name) == 0 && strcmp(ver, version) == 0) {
                 fclose(f);
+                unlink("/tmp/DATA.db");
                 return 1; // Déjà existant
             }
         }
     }
     
     fclose(f);
-    return 0;
+    unlink("/tmp/DATA.db");
+    return 0; // Pas de doublon
 }
 
 // Mettre à jour le fichier metadata
 int security_update_metadata(const package_metadata_t *metadata) {
     // Télécharger le metadata actuel
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), 
-             "curl -s -H 'Accept: application/vnd.github.v3.raw' "
-             "https://api.github.com/repos/gopu-inc/apkm-gest/contents/%s > /tmp/DATA.current",
+    char url[512];
+    snprintf(url, sizeof(url), 
+             "https://raw.githubusercontent.com/gopu-inc/apkm-gest/master/%s",
              METADATA_FILE);
+    
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "curl -s %s > /tmp/DATA.current 2>/dev/null", url);
     system(cmd);
     
     // Ajouter la nouvelle entrée
@@ -176,36 +204,17 @@ int security_update_metadata(const package_metadata_t *metadata) {
     }
     
     // Ajouter la nouvelle entrée
-    fprintf(out, "%s|%s|%s|%ld|%s\n", 
+    fprintf(out, "%s|%s|%s|%lld|%s\n", 
             metadata->name, metadata->version, 
-            metadata->sha256, metadata->timestamp,
+            metadata->sha256, (long long)metadata->timestamp,
             metadata->publisher);
     
     fclose(out);
     
+    // Ici, il faudrait uploader le fichier sur GitHub avec le token
+    printf("[SECURITY] 📝 Metadata mis à jour pour %s %s\n", 
+           metadata->name, metadata->version);
+    
+    unlink("/tmp/DATA.current");
     return 0;
-}
-
-// Signer un paquet avec GPG
-int security_sign_package(const char *package_path, const char *key_path, char *signature) {
-    char cmd[1024];
-    char sig_file[512];
-    snprintf(sig_file, sizeof(sig_file), "%s.sig", package_path);
-    
-    snprintf(cmd, sizeof(cmd), 
-             "gpg --batch --yes --detach-sign --armor -u %s -o %s %s 2>/dev/null",
-             key_path, sig_file, package_path);
-    
-    if (system(cmd) == 0) {
-        FILE *f = fopen(sig_file, "r");
-        if (f) {
-            size_t len = fread(signature, 1, 4096, f);
-            signature[len] = '\0';
-            fclose(f);
-            unlink(sig_file);
-            return 0;
-        }
-    }
-    
-    return -1;
 }
