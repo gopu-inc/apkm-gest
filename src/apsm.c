@@ -184,7 +184,148 @@ char* load_documentation(char *buffer, size_t buffer_size) {
     
     return buffer;
 }
+// Fonction pour échapper une chaîne pour JSON
+char* escape_json(const char *str, char *output, size_t output_size) {
+    size_t j = 0;
+    for (size_t i = 0; str[i] && j < output_size - 1; i++) {
+        switch (str[i]) {
+            case '"':  output[j++] = '\\'; output[j++] = '"'; break;
+            case '\\': output[j++] = '\\'; output[j++] = '\\'; break;
+            case '\b': output[j++] = '\\'; output[j++] = 'b'; break;
+            case '\f': output[j++] = '\\'; output[j++] = 'f'; break;
+            case '\n': output[j++] = '\\'; output[j++] = 'n'; break;
+            case '\r': output[j++] = '\\'; output[j++] = 'r'; break;
+            case '\t': output[j++] = '\\'; output[j++] = 't'; break;
+            default:   output[j++] = str[i]; break;
+        }
+    }
+    output[j] = '\0';
+    return output;
+}
 
+// Version corrigée de create_github_release
+int create_github_release(const char *token, const char *tag, const char *name,
+                          const char *version, const char *release,
+                          const char *arch, const char *sha256,
+                          const char *doc_content, char *upload_url, size_t upload_url_size) {
+    
+    CURL *curl = curl_easy_init();
+    if (!curl) return -1;
+    
+    struct curl_response resp = {0};
+    struct curl_slist *headers = NULL;
+    
+    char auth_header[512];
+    snprintf(auth_header, sizeof(auth_header), "Authorization: token %s", token);
+    
+    char url[512];
+    snprintf(url, sizeof(url), "https://api.github.com/repos/gopu-inc/apkm-gest/releases");
+    
+    // Préparer le body avec échappement JSON
+    char doc_escaped[MAX_DOC_SIZE * 2] = "";
+    escape_json(doc_content, doc_escaped, sizeof(doc_escaped));
+    
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    char date_str[64];
+    strftime(date_str, sizeof(date_str), "%Y-%m-%d %H:%M:%S", tm_info);
+    
+    // Construire le body (sans le mettre dans un autre JSON)
+    char body_text[MAX_DOC_SIZE * 2];
+    snprintf(body_text, sizeof(body_text),
+             "# %s %s\n\n"
+             "## Package Information\n"
+             "- **Version:** %s\n"
+             "- **Release:** %s\n"
+             "- **Architecture:** %s\n"
+             "- **SHA256:** `%s`\n"
+             "- **Published:** %s\n\n"
+             "## Documentation\n"
+             "%s\n\n"
+             "## Installation\n"
+             "```bash\n"
+             "apkm install %s@%s\n"
+             "```",
+             name, tag, version, release, arch, sha256, date_str,
+             doc_escaped, name, version);
+    
+    // Échapper le body pour JSON
+    char body_escaped[MAX_DOC_SIZE * 4] = "";
+    escape_json(body_text, body_escaped, sizeof(body_escaped));
+    
+    // Construire le JSON final
+    char post_data[MAX_DOC_SIZE * 8];
+    snprintf(post_data, sizeof(post_data),
+             "{"
+             "\"tag_name\": \"%s\","
+             "\"target_commitish\": \"main\","
+             "\"name\": \"%s %s\","
+             "\"body\": \"%s\","
+             "\"draft\": false,"
+             "\"prerelease\": false"
+             "}", tag, name, tag, body_escaped);
+    
+    headers = curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, auth_header);
+    headers = curl_slist_append(headers, "User-Agent: APSM-Publisher/2.0");
+    
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+    
+    printf("[APSM] 📦 Creating release %s...\n", tag);
+    
+    CURLcode res = curl_easy_perform(curl);
+    
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    
+    if (res != CURLE_OK || http_code != 201) {
+        fprintf(stderr, "[APSM] ❌ Failed to create release (HTTP %ld)\n", http_code);
+        if (resp.data) {
+            fprintf(stderr, "Response: %s\n", resp.data);
+        }
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        free(resp.data);
+        return -1;
+    }
+    
+    // Extraire l'upload URL (inchangé)
+    char *upload_url_ptr = strstr(resp.data, "\"upload_url\":\"");
+    if (upload_url_ptr) {
+        upload_url_ptr += 14;
+        char *end = strchr(upload_url_ptr, '"');
+        if (end) {
+            int len = end - upload_url_ptr;
+            if (len < upload_url_size - 1) {
+                strncpy(upload_url, upload_url_ptr, len);
+                upload_url[len] = '\0';
+                char *brace = strchr(upload_url, '{');
+                if (brace) *brace = '\0';
+            }
+        }
+    }
+    
+    int release_id = 0;
+    char *id_ptr = strstr(resp.data, "\"id\":");
+    if (id_ptr) {
+        id_ptr += 5;
+        release_id = atoi(id_ptr);
+    }
+    
+    printf("[APSM] ✅ Release created (ID: %d)\n", release_id);
+    printf("[APSM] 🔗 https://github.com/gopu-inc/apkm-gest/releases/tag/%s\n", tag);
+    
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    free(resp.data);
+    
+    return release_id;
+}
 // Extraire les infos du package depuis le nom de fichier
 void parse_package_filename(const char *filename, char *name, char *version, 
                             char *release, char *arch, char *suffix) {
