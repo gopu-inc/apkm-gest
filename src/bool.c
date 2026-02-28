@@ -326,7 +326,10 @@ int build_package(apkm_build_t *b) {
     
     // Step 5: Create signature file
     strcpy(b->sha256, "pending");
-    create_signature_file(b, "pkg-" b->name);
+
+char pkg_dir[512];
+snprintf(pkg_dir, sizeof(pkg_dir), "pkg-%s", b->name);
+create_signature_file(b, pkg_dir);
     
     // Step 6: Create final archive
     printf("\n📦 CREATING FINAL ARCHIVE:\n");
