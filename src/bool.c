@@ -61,7 +61,10 @@ void clean_string(char *str) {
 // Calculer SHA256 d'un fichier
 int calculate_file_sha256(const char *filepath, char *output) {
     FILE *f = fopen(filepath, "rb");
-    if (!f) return -1;
+    if (!f) {
+        printf("[BOOL] Cannot open file for SHA256: %s\n", filepath);
+        return -1;
+    }
     
     SHA256_CTX ctx;
     SHA256_Init(&ctx);
@@ -89,7 +92,7 @@ int calculate_file_sha256(const char *filepath, char *output) {
 void parse_apkmbuild(const char *filename, apkm_build_t *b) {
     FILE *fp = fopen(filename, "r");
     if (!fp) {
-        perror("[BOOL] Error");
+        perror("[BOOL] Error opening APKMBUILD");
         exit(1);
     }
 
@@ -115,6 +118,9 @@ void parse_apkmbuild(const char *filename, apkm_build_t *b) {
     gethostname(b->build_host, sizeof(b->build_host));
     
     while (fgets(line, sizeof(line), fp)) {
+        // Enlever les retours à la ligne
+        line[strcspn(line, "\n")] = 0;
+        
         if (strstr(line, "$APKMMAKE::")) {
             in_block = 1;
             strcpy(current_block, "make");
@@ -144,12 +150,16 @@ void parse_apkmbuild(const char *filename, apkm_build_t *b) {
             if (strstr(line, "}")) {
                 in_block = 0;
             } else {
-                if (strcmp(current_block, "make") == 0)
+                if (strcmp(current_block, "make") == 0) {
+                    strcat(b->build_cmd, " ");
                     strcat(b->build_cmd, line);
-                else if (strcmp(current_block, "install") == 0)
+                } else if (strcmp(current_block, "install") == 0) {
+                    strcat(b->install_cmd, " ");
                     strcat(b->install_cmd, line);
-                else if (strcmp(current_block, "check") == 0)
+                } else if (strcmp(current_block, "check") == 0) {
+                    strcat(b->check_cmd, " ");
                     strcat(b->check_cmd, line);
+                }
             }
             continue;
         }
@@ -216,6 +226,7 @@ int create_package_structure(apkm_build_t *b, const char *build_dir) {
     char pkg_dir[512];
     snprintf(pkg_dir, sizeof(pkg_dir), "%s/pkg-%s", build_dir, b->name);
     
+    // Créer le répertoire principal
     mkdir(pkg_dir, 0755);
     
     char path[1024];
@@ -242,8 +253,9 @@ int create_package_structure(apkm_build_t *b, const char *build_dir) {
     snprintf(path, sizeof(path), "%s/usr/lib/pkgconfig", pkg_dir);
     mkdir(path, 0755);
     
-    printf("[BOOL] 📦 Copying project files...\n");
+    printf("[BOOL] Copying project files...\n");
     
+    // Copier tous les fichiers (sauf build/ et pkg-*/)
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), 
              "find . -maxdepth 1 -not -name 'build' -not -name 'pkg-*' -not -name '.' -exec cp -r {} %s/ \\;",
@@ -277,7 +289,7 @@ void create_signature_file(apkm_build_t *b, const char *pkg_dir) {
     fprintf(sig, "DEPENDENCIES=%s\n", b->deps);
     
     fclose(sig);
-    printf("[BOOL] 🔏 Signature file created: .BOOL.sig\n");
+    printf("[BOOL] Signature file created: .BOOL.sig\n");
 }
 
 // Builder le paquet
@@ -298,7 +310,7 @@ int build_package(apkm_build_t *b) {
         printf("\n🔧 BUILD STEP:\n");
         printf("  • Executing: %s\n", b->build_cmd);
         if (system(b->build_cmd) != 0) {
-            printf("[BOOL] ⚠️ Build non-blocking\n");
+            printf("[BOOL] Build non-blocking (continuing anyway)\n");
         }
     }
     
@@ -326,10 +338,9 @@ int build_package(apkm_build_t *b) {
     
     // Step 5: Create signature file
     strcpy(b->sha256, "pending");
-
-char pkg_dir[512];
-snprintf(pkg_dir, sizeof(pkg_dir), "pkg-%s", b->name);
-create_signature_file(b, pkg_dir);
+    char pkg_dir[512];
+    snprintf(pkg_dir, sizeof(pkg_dir), "pkg-%s", b->name);
+    create_signature_file(b, pkg_dir);
     
     // Step 6: Create final archive
     printf("\n📦 CREATING FINAL ARCHIVE:\n");
@@ -339,72 +350,113 @@ create_signature_file(b, pkg_dir);
              "build/%s-v%s-%s.%s.tar.bool", 
              b->name, b->version, b->release, b->arch);
     
-    // Use tar with compression - this creates a valid tar.gz
+    // S'assurer que le répertoire build existe
+    mkdir("build", 0755);
+    
+    // Commande tar simplifiée et corrigée
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), 
-             "cd pkg-%s && tar -czf ../../%s * && cd ../..", 
+             "cd pkg-%s && tar -czf ../%s *", 
              b->name, archive_name);
     
-    if (system(cmd) == 0) {
-        // Calculate SHA256 of final archive
-        calculate_file_sha256(archive_name, b->sha256);
-        
-        // Get file size
-        struct stat st;
-        stat(archive_name, &st);
-        b->file_size = st.st_size;
-        
-        printf("  ✅ Archive created: %s (%.2f KB)\n", 
-               archive_name, st.st_size / 1024.0);
-        printf("  🔏 SHA256: %.32s...\n", b->sha256);
-        
-        // Create a separate signature file
-        char sig_file[512];
-        snprintf(sig_file, sizeof(sig_file), "%s.sha256", archive_name);
-        FILE *sf = fopen(sig_file, "w");
-        if (sf) {
-            fprintf(sf, "%s  %s\n", b->sha256, archive_name);
-            fclose(sf);
-            printf("  📄 SHA256 file created: %s.sha256\n", archive_name);
+    printf("[BOOL] Running: %s\n", cmd);
+    fflush(stdout);
+    
+    int tar_result = system(cmd);
+    
+    if (tar_result == 0) {
+        // Vérifier que l'archive a été créée
+        if (access(archive_name, F_OK) == 0) {
+            // Calculer SHA256
+            if (calculate_file_sha256(archive_name, b->sha256) == 0) {
+                // Obtenir la taille
+                struct stat st;
+                stat(archive_name, &st);
+                b->file_size = st.st_size;
+                
+                printf("  ✅ Archive created: %s (%.2f KB)\n", 
+                       archive_name, st.st_size / 1024.0);
+                printf("  🔏 SHA256: %.32s...\n", b->sha256);
+                
+                // Créer le fichier SHA256
+                char sha_file[512];
+                snprintf(sha_file, sizeof(sha_file), "%s.sha256", archive_name);
+                FILE *sf = fopen(sha_file, "w");
+                if (sf) {
+                    fprintf(sf, "%s  %s\n", b->sha256, archive_name);
+                    fclose(sf);
+                    printf("  📄 SHA256 file created: %s\n", sha_file);
+                }
+                
+                // Créer le manifeste
+                char manifest[512];
+                snprintf(manifest, sizeof(manifest), "build/%s.manifest", b->name);
+                FILE *mf = fopen(manifest, "w");
+                if (mf) {
+                    fprintf(mf, "NAME=%s\n", b->name);
+                    fprintf(mf, "VERSION=%s\n", b->version);
+                    fprintf(mf, "RELEASE=%s\n", b->release);
+                    fprintf(mf, "ARCH=%s\n", b->arch);
+                    fprintf(mf, "SHA256=%s\n", b->sha256);
+                    fprintf(mf, "SIZE=%lld\n", (long long)st.st_size);
+                    fprintf(mf, "BUILD_DATE=%s\n", b->build_date);
+                    fprintf(mf, "BUILD_HOST=%s\n", b->build_host);
+                    fprintf(mf, "MAINTAINER=%s\n", b->maintainer);
+                    fprintf(mf, "DESCRIPTION=%s\n", b->description);
+                    fclose(mf);
+                    printf("  📄 Manifest created: %s\n", manifest);
+                }
+            } else {
+                printf("  ❌ Failed to calculate SHA256\n");
+            }
+        } else {
+            printf("  ❌ Archive file not found after tar command\n");
+            printf("  🔍 Check if pkg-%s directory exists and has files\n", b->name);
+            
+            // Lister le contenu du répertoire pour debug
+            snprintf(cmd, sizeof(cmd), "ls -la pkg-%s/", b->name);
+            system(cmd);
         }
+    } else {
+        printf("  ❌ Tar command failed with code: %d\n", tar_result);
         
-        // Create manifest
-        char manifest[512];
-        snprintf(manifest, sizeof(manifest), "build/%s.manifest", b->name);
-        FILE *mf = fopen(manifest, "w");
-        if (mf) {
-            fprintf(mf, "NAME=%s\n", b->name);
-            fprintf(mf, "VERSION=%s\n", b->version);
-            fprintf(mf, "RELEASE=%s\n", b->release);
-            fprintf(mf, "ARCH=%s\n", b->arch);
-            fprintf(mf, "SHA256=%s\n", b->sha256);
-            fprintf(mf, "SIZE=%lld\n", (long long)st.st_size);
-            fprintf(mf, "BUILD_DATE=%s\n", b->build_date);
-            fprintf(mf, "BUILD_HOST=%s\n", b->build_host);
-            fprintf(mf, "MAINTAINER=%s\n", b->maintainer);
-            fprintf(mf, "DESCRIPTION=%s\n", b->description);
-            fclose(mf);
-            printf("  📄 Manifest created: %s\n", manifest);
+        // Essayer une commande alternative
+        printf("[BOOL] Trying alternative tar command...\n");
+        snprintf(cmd, sizeof(cmd), 
+                 "tar -czf %s -C pkg-%s .", 
+                 archive_name, b->name);
+        printf("[BOOL] Running: %s\n", cmd);
+        
+        if (system(cmd) == 0 && access(archive_name, F_OK) == 0) {
+            printf("  ✅ Archive created with alternative command\n");
+            
+            struct stat st;
+            stat(archive_name, &st);
+            b->file_size = st.st_size;
+            printf("  ✅ Archive created: %s (%.2f KB)\n", 
+                   archive_name, st.st_size / 1024.0);
+        } else {
+            printf("  ❌ Alternative command also failed\n");
         }
-        
-        // Cleanup
-        snprintf(cmd, sizeof(cmd), "rm -rf pkg-%s", b->name);
-        system(cmd);
-        
+    }
+    
+    // Cleanup
+    printf("[BOOL] Cleaning up...\n");
+    snprintf(cmd, sizeof(cmd), "rm -rf pkg-%s", b->name);
+    system(cmd);
+    
+    if (access(archive_name, F_OK) == 0) {
         return 0;
     } else {
-        printf("  ❌ Failed to create archive\n");
         return -1;
     }
 }
 
-// Show package info from manifest
+// Afficher les informations du package
 int show_package_info(const char *package_path) {
-    // Check if it's a valid tar.gz
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "file %s | grep -q 'gzip compressed data'", package_path);
-    if (system(cmd) != 0) {
-        printf("[BOOL] ❌ Not a valid gzip archive\n");
+    struct stat st;
+    if (stat(package_path, &st) != 0) {
+        printf("[BOOL] File not found: %s\n", package_path);
         return -1;
     }
     
@@ -412,21 +464,28 @@ int show_package_info(const char *package_path) {
     printf("  BOOL Package Information\n");
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     
-    // Show file info
-    struct stat st;
-    stat(package_path, &st);
     printf("  📦 File: %s\n", package_path);
     printf("  📏 Size: %.2f KB\n", st.st_size / 1024.0);
     
-    // Calculate SHA256
+    // Calculer SHA256
     char sha256[128];
     if (calculate_file_sha256(package_path, sha256) == 0) {
-        printf("  🔏 SHA256: %.32s...\n", sha256);
+        printf("  🔏 SHA256: %s\n", sha256);
     }
     
-    // Try to extract and show .BOOL.sig if exists
-    printf("\n  📋 To see contents: tar -tzf %s\n", package_path);
-    printf("  🔍 To extract: tar -xzf %s\n", package_path);
+    // Vérifier si c'est une archive valide
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "file %s | grep -q 'gzip compressed data'", package_path);
+    if (system(cmd) == 0) {
+        printf("  ✅ Valid gzip archive\n");
+        
+        // Afficher le contenu
+        printf("\n  📋 Archive contents:\n");
+        snprintf(cmd, sizeof(cmd), "tar -tzf %s 2>/dev/null | head -10 | sed 's/^/    /'", package_path);
+        system(cmd);
+    } else {
+        printf("  ❌ Not a valid gzip archive\n");
+    }
     
     return 0;
 }
@@ -444,12 +503,19 @@ int main(int argc, char *argv[]) {
         printf("Examples:\n");
         printf("  bool --build\n");
         printf("  bool --info build/package.tar.bool\n");
-        printf("  sha256sum build/package.tar.bool  # Verify signature\n");
+        printf("  sha256sum -c build/package.tar.bool.sha256\n");
         return 0;
     }
     
     if (strcmp(argv[1], "--build") == 0) {
+        // Créer le répertoire build
         mkdir("build", 0755);
+        
+        // Vérifier que APKMBUILD existe
+        if (access("APKMBUILD", F_OK) != 0) {
+            printf("[BOOL] Error: APKMBUILD not found in current directory\n");
+            return 1;
+        }
         
         apkm_build_t build_info = {0};
         parse_apkmbuild("APKMBUILD", &build_info);
@@ -469,36 +535,37 @@ int main(int argc, char *argv[]) {
     }
     else if (strcmp(argv[1], "--info") == 0) {
         if (argc < 3) {
-            printf("[BOOL] ❌ Specify a package file\n");
+            printf("[BOOL] Error: Specify a package file\n");
             return 1;
         }
         show_package_info(argv[2]);
     }
     else if (strcmp(argv[1], "--verify") == 0) {
         if (argc < 3) {
-            printf("[BOOL] ❌ Specify a package file\n");
+            printf("[BOOL] Error: Specify a package file\n");
             return 1;
         }
-        printf("[BOOL] 🔍 Verifying %s...\n", argv[2]);
+        printf("[BOOL] Verifying %s...\n", argv[2]);
         
-        // Check if SHA256 file exists
-        char sha256_file[512];
-        snprintf(sha256_file, sizeof(sha256_file), "%s.sha256", argv[2]);
+        // Vérifier si le fichier SHA256 existe
+        char sha_file[512];
+        snprintf(sha_file, sizeof(sha_file), "%s.sha256", argv[2]);
         
-        if (access(sha256_file, F_OK) == 0) {
+        if (access(sha_file, F_OK) == 0) {
             char cmd[1024];
-            snprintf(cmd, sizeof(cmd), "sha256sum -c %s", sha256_file);
+            snprintf(cmd, sizeof(cmd), "cd %s && sha256sum -c %s", 
+                     dirname(strdup(sha_file)), basename(strdup(sha_file)));
             if (system(cmd) == 0) {
                 printf("[BOOL] ✅ Package verified successfully\n");
             } else {
                 printf("[BOOL] ❌ Package verification failed\n");
             }
         } else {
-            // Just calculate SHA256
+            // Calculer SHA256 directement
             char sha256[128];
             if (calculate_file_sha256(argv[2], sha256) == 0) {
                 printf("[BOOL] 🔏 SHA256: %s\n", sha256);
-                printf("[BOOL] ⚠️ No signature file found\n");
+                printf("[BOOL] No signature file found\n");
             }
         }
     }
@@ -512,7 +579,7 @@ int main(int argc, char *argv[]) {
         printf("  --help      Show this help\n");
     }
     else {
-        printf("[BOOL] ❌ Unknown option: %s\n", argv[1]);
+        printf("[BOOL] Unknown option: %s\n", argv[1]);
         printf("Try 'bool --help'\n");
         return 1;
     }
