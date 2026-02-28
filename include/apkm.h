@@ -17,6 +17,11 @@
 #define APKM_CONFIG_PATH "/etc/apkm/config.toml"
 #define ALPINE_DB_PATH "/lib/apk/db/installed"
 
+#define REPO_OWNER "gopu-inc"
+#define REPO_NAME "apkm-gest"
+#define REPO_RAW "https://raw.githubusercontent.com/gopu-inc/apkm-gest/main"
+#define REPO_API "https://api.github.com/repos/gopu-inc/apkm-gest"
+#define REPO_RELEASES "https://api.github.com/repos/gopu-inc/apkm-gest/releases"
 // Formats de sortie
 typedef enum {
     OUTPUT_TEXT,
