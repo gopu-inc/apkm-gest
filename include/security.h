@@ -46,6 +46,7 @@ int security_verify_package(const char *package_path, const char *signature);
 int security_check_duplicate(const char *package_name, const char *version);
 int security_update_metadata(const package_metadata_t *metadata);
 int security_generate_keypair(const char *name, const char *email);
+int calculate_sha256(const char *filepath, char *output);
 void btscrypt_process(char *data, int encrypt);
 
 #endif
