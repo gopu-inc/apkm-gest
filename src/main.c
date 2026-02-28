@@ -142,63 +142,50 @@ int download_from_github(const char *pkg_name, const char *version,
         return -1;
     }
     
-    // Construct GitHub URL
-    char url[512];
-    snprintf(url, sizeof(url), 
-             "https://raw.githubusercontent.com/gopu-inc/apkm-gest/master/build/%s-v%s.tar.bool",
-             pkg_name, version);
+    // D'abord, chercher dans DATA.db pour obtenir l'URL exacte
+    char db_url[512];
+    snprintf(db_url, sizeof(db_url), 
+             "https://raw.githubusercontent.com/%s/%s/main/DATA.db",
+             REPO_OWNER, REPO_NAME);
     
-    // Alternative: use releases
-    char alt_url[512];
-    snprintf(alt_url, sizeof(alt_url),
-             "https://github.com/gopu-inc/apkm-gest/releases/download/v%s/%s-v%s.tar.bool",
-             version, pkg_name, version);
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), 
+             "curl -s %s | grep '^%s|%s' | cut -d'|' -f6",
+             db_url, pkg_name, version);
     
-    FILE *fp = fopen(output_path, "wb");
-    if (!fp) {
-        fprintf(stderr, "[APKM] Cannot create output file: %s\n", output_path);
+    FILE *fp = popen(cmd, "r");
+    char url[1024] = "";
+    if (fp) {
+        fgets(url, sizeof(url), fp);
+        pclose(fp);
+        url[strcspn(url, "\n")] = 0;
+    }
+    
+    // Si pas trouvé dans DATA.db, utiliser l'URL par défaut des releases
+    if (strlen(url) == 0) {
+        snprintf(url, sizeof(url),
+                 "https://github.com/%s/%s/releases/download/v%s/%s-v%s.%s.tar.bool",
+                 REPO_OWNER, REPO_NAME, version, pkg_name, version, "r1.x86_64");
+    }
+    
+    printf("[APKM] Fetching from: %s\n", url);
+    
+    FILE *out = fopen(output_path, "wb");
+    if (!out) {
+        fprintf(stderr, "[APKM] Cannot create output file\n");
         curl_easy_cleanup(curl);
         return -1;
     }
     
-    download_context_t ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.fp = fp;
-    ctx.last_progress = 0;
-    strncpy(ctx.filename, pkg_name, sizeof(ctx.filename) - 1);
-    ctx.start_time = time(NULL);
-    ctx.last_time = ctx.start_time;
-    ctx.last_dlnow = 0;
-    ctx.download_speed = 0;
-    
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
-    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, out);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "APKM-Installer/2.0");
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     
-    printf("[APKM] Fetching from GitHub...\n");
-    
     CURLcode res = curl_easy_perform(curl);
-    
-    if (res != CURLE_OK) {
-        printf("\n[APKM] Failed with primary URL, trying alternative...\n");
-        
-        // Try alternative URL
-        curl_easy_setopt(curl, CURLOPT_URL, alt_url);
-        rewind(fp);
-        ctx.last_progress = 0;
-        ctx.last_dlnow = 0;
-        ctx.last_time = time(NULL);
-        
-        res = curl_easy_perform(curl);
-    }
-    
-    fclose(fp);
+    fclose(out);
     
     if (res != CURLE_OK) {
         fprintf(stderr, "\n[APKM] Download failed: %s\n", curl_easy_strerror(res));
@@ -217,8 +204,7 @@ int download_from_github(const char *pkg_name, const char *version,
         return -1;
     }
     
-    printf("[APKM] Download complete (HTTP %ld)\n", http_code);
-    
+    printf("[APKM] Download complete\n");
     curl_easy_cleanup(curl);
     
     return 0;
