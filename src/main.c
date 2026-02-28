@@ -20,40 +20,61 @@
 typedef struct {
     FILE *fp;
     double last_progress;
-    char *filename;
+    char filename[256];
     time_t start_time;
+    double download_speed;
+    curl_off_t last_dlnow;
+    time_t last_time;
 } download_context_t;
 
-// Progress bar display
-void show_progress(double percentage, const char *filename) {
+// Native progress bar display (ASCII only)
+void show_progress(double percentage, const char *filename, double speed) {
     int bar_width = PROGRESS_WIDTH;
     int pos = (int)(percentage * bar_width / 100.0);
     
     printf("\r[");
     for (int i = 0; i < bar_width; i++) {
-        if (i < pos) printf("█");
-        else if (i == pos) printf("█");
-        else printf(" ");
+        if (i < pos) {
+            printf("=");
+        } else if (i == pos && percentage < 100.0) {
+            printf(">");
+        } else {
+            printf(" ");
+        }
     }
-    printf("] %3.0f%% %s", percentage, filename);
-    fflush(stdout);
     
     if (percentage >= 100.0) {
-        printf("\n");
+        printf("] %3.0f%% %s - Complete        \n", percentage, filename);
+    } else {
+        printf("] %3.0f%% %s - %.1f KB/s      ", 
+               percentage, filename, speed / 1024.0);
     }
+    fflush(stdout);
 }
 
 // Progress callback for curl
 int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
                        curl_off_t ultotal, curl_off_t ulnow) {
+    (void)ultotal;  // Unused
+    (void)ulnow;    // Unused
+    
     download_context_t *ctx = (download_context_t *)clientp;
     
     if (dltotal > 0) {
         double percentage = (double)dlnow / (double)dltotal * 100.0;
         
+        // Calculate speed
+        time_t now = time(NULL);
+        if (now > ctx->last_time) {
+            curl_off_t diff = dlnow - ctx->last_dlnow;
+            ctx->download_speed = (double)diff / (now - ctx->last_time);
+            ctx->last_dlnow = dlnow;
+            ctx->last_time = now;
+        }
+        
         // Update every 1% or on complete
         if (percentage - ctx->last_progress >= 1.0 || percentage >= 100.0) {
-            show_progress(percentage, ctx->filename);
+            show_progress(percentage, ctx->filename, ctx->download_speed);
             ctx->last_progress = percentage;
         }
     }
@@ -64,175 +85,6 @@ int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
 size_t write_callback(void *ptr, size_t size, size_t nmemb, void *stream) {
     FILE *fp = (FILE *)stream;
     return fwrite(ptr, size, nmemb, fp);
-}
-
-// Check if file is a BOOL archive with magic header
-int is_bool_archive(const char *filepath) {
-    FILE *f = fopen(filepath, "r");
-    if (!f) return 0;
-    
-    char magic[256];
-    if (fgets(magic, sizeof(magic), f)) {
-        // Check for BOOL magic header
-        if (strstr(magic, "00012x0 0032000 bool APKM") != NULL ||
-            strstr(magic, "#!BOOL/APKM") != NULL) {
-            fclose(f);
-            return 1;
-        }
-    }
-    fclose(f);
-    return 0;
-}
-
-// Extract BOOL archive (skipping header)
-int extract_bool_archive(const char *filepath, const char *dest_path) {
-    printf("[APKM] 🔍 Extracting BOOL archive (with magic header)...\n");
-    
-    char cmd[1024];
-    
-    // Method 1: Use tail to skip first 10 lines (header)
-    snprintf(cmd, sizeof(cmd), 
-             "tail -n +10 '%s' 2>/dev/null | tar -xz -C '%s' 2>/dev/null", 
-             filepath, dest_path);
-    
-    if (system(cmd) == 0) {
-        return 0;
-    }
-    
-    // Method 2: Use dd to skip first 512 bytes
-    printf("[APKM] ⚠️ Trying alternative extraction method...\n");
-    snprintf(cmd, sizeof(cmd), 
-             "dd if='%s' bs=512 skip=1 2>/dev/null | tar -xz -C '%s' 2>/dev/null",
-             filepath, dest_path);
-    
-    if (system(cmd) == 0) {
-        return 0;
-    }
-    
-    // Method 3: Read header size from file
-    printf("[APKM] ⚠️ Trying to detect header size...\n");
-    FILE *f = fopen(filepath, "r");
-    if (f) {
-        char line[256];
-        int header_lines = 0;
-        while (fgets(line, sizeof(line), f)) {
-            header_lines++;
-            if (strstr(line, "########## END HEADER ##########") ||
-                strstr(line, "FIN EN-TETE") ||
-                strstr(line, "END HEADER")) {
-                break;
-            }
-            if (header_lines > 20) break; // Safety
-        }
-        fclose(f);
-        
-        snprintf(cmd, sizeof(cmd), 
-                 "tail -n +%d '%s' | tar -xz -C '%s' 2>/dev/null",
-                 header_lines + 1, filepath, dest_path);
-        
-        if (system(cmd) == 0) {
-            return 0;
-        }
-    }
-    
-    // Method 4: Regular tar (if no header)
-    snprintf(cmd, sizeof(cmd), "tar -xzf '%s' -C '%s'", filepath, dest_path);
-    if (system(cmd) == 0) {
-        return 0;
-    }
-    
-    return -1;
-}
-
-// Download package from GitHub
-int download_from_github(const char *pkg_name, const char *version, 
-                         const char *output_path) {
-    printf("[APKM] 📥 Downloading %s %s from GitHub...\n", pkg_name, version);
-    
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-        fprintf(stderr, "[APKM] ❌ Failed to initialize curl\n");
-        return -1;
-    }
-    
-    // Construct GitHub URL
-    char url[512];
-    snprintf(url, sizeof(url), 
-             "https://raw.githubusercontent.com/gopu-inc/apkm-gest/master/build/%s-v%s.tar.bool",
-             pkg_name, version);
-    
-    // Alternative: use releases
-    char alt_url[512];
-    snprintf(alt_url, sizeof(alt_url),
-             "https://github.com/gopu-inc/apkm-gest/releases/download/v%s/%s-v%s.tar.bool",
-             version, pkg_name, version);
-    
-    FILE *fp = fopen(output_path, "wb");
-    if (!fp) {
-        fprintf(stderr, "[APKM] ❌ Cannot create output file: %s\n", output_path);
-        curl_easy_cleanup(curl);
-        return -1;
-    }
-    
-    download_context_t ctx = {
-        .fp = fp,
-        .last_progress = 0,
-        .filename = strdup(pkg_name),
-        .start_time = time(NULL)
-    };
-    
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
-    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "APKM-Installer/2.0");
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-    
-    printf("[APKM] 🌐 Fetching from: %s\n", url);
-    
-    CURLcode res = curl_easy_perform(curl);
-    
-    if (res != CURLE_OK) {
-        printf("\n[APKM] ⚠️ Failed with primary URL, trying alternative...\n");
-        
-        // Try alternative URL
-        curl_easy_setopt(curl, CURLOPT_URL, alt_url);
-        rewind(fp);
-        ctx.last_progress = 0;
-        
-        res = curl_easy_perform(curl);
-    }
-    
-    fclose(fp);
-    
-    if (res != CURLE_OK) {
-        fprintf(stderr, "\n[APKM] ❌ Download failed: %s\n", curl_easy_strerror(res));
-        unlink(output_path);
-        curl_easy_cleanup(curl);
-        free(ctx.filename);
-        return -1;
-    }
-    
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    
-    if (http_code != 200) {
-        fprintf(stderr, "\n[APKM] ❌ HTTP error: %ld\n", http_code);
-        unlink(output_path);
-        curl_easy_cleanup(curl);
-        free(ctx.filename);
-        return -1;
-    }
-    
-    printf("[APKM] ✅ Download complete (HTTP %ld)\n", http_code);
-    
-    curl_easy_cleanup(curl);
-    free(ctx.filename);
-    
-    return 0;
 }
 
 // Parse package info from filename
@@ -279,29 +131,97 @@ void parse_package_filename(const char *filepath, char *pkg_name, char *pkg_vers
     }
 }
 
-// Read BOOL header from archive
-void read_bool_header(const char *filepath) {
-    FILE *f = fopen(filepath, "r");
-    if (!f) return;
+// Download package from GitHub
+int download_from_github(const char *pkg_name, const char *version, 
+                         const char *output_path) {
+    printf("[APKM] Downloading %s %s from GitHub...\n", pkg_name, version);
     
-    printf("[APKM] 📋 BOOL Package Header:\n");
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
-    char line[256];
-    int line_count = 0;
-    
-    while (fgets(line, sizeof(line), f) && line_count < 20) {
-        if (line_count == 0) {
-            printf("  🔮 Magic: %s", line);
-        } else if (strstr(line, "#") == line) {
-            printf("  %s", line);
-        } else {
-            break;
-        }
-        line_count++;
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        fprintf(stderr, "[APKM] Failed to initialize curl\n");
+        return -1;
     }
     
-    fclose(f);
+    // Construct GitHub URL
+    char url[512];
+    snprintf(url, sizeof(url), 
+             "https://raw.githubusercontent.com/gopu-inc/apkm-gest/master/build/%s-v%s.tar.bool",
+             pkg_name, version);
+    
+    // Alternative: use releases
+    char alt_url[512];
+    snprintf(alt_url, sizeof(alt_url),
+             "https://github.com/gopu-inc/apkm-gest/releases/download/v%s/%s-v%s.tar.bool",
+             version, pkg_name, version);
+    
+    FILE *fp = fopen(output_path, "wb");
+    if (!fp) {
+        fprintf(stderr, "[APKM] Cannot create output file: %s\n", output_path);
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+    
+    download_context_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.fp = fp;
+    ctx.last_progress = 0;
+    strncpy(ctx.filename, pkg_name, sizeof(ctx.filename) - 1);
+    ctx.start_time = time(NULL);
+    ctx.last_time = ctx.start_time;
+    ctx.last_dlnow = 0;
+    ctx.download_speed = 0;
+    
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "APKM-Installer/2.0");
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    
+    printf("[APKM] Fetching from GitHub...\n");
+    
+    CURLcode res = curl_easy_perform(curl);
+    
+    if (res != CURLE_OK) {
+        printf("\n[APKM] Failed with primary URL, trying alternative...\n");
+        
+        // Try alternative URL
+        curl_easy_setopt(curl, CURLOPT_URL, alt_url);
+        rewind(fp);
+        ctx.last_progress = 0;
+        ctx.last_dlnow = 0;
+        ctx.last_time = time(NULL);
+        
+        res = curl_easy_perform(curl);
+    }
+    
+    fclose(fp);
+    
+    if (res != CURLE_OK) {
+        fprintf(stderr, "\n[APKM] Download failed: %s\n", curl_easy_strerror(res));
+        unlink(output_path);
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+    
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    
+    if (http_code != 200) {
+        fprintf(stderr, "\n[APKM] HTTP error: %ld\n", http_code);
+        unlink(output_path);
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+    
+    printf("[APKM] Download complete (HTTP %ld)\n", http_code);
+    
+    curl_easy_cleanup(curl);
+    
+    return 0;
 }
 
 // Register installed package in database
@@ -328,7 +248,7 @@ void register_installed_package(const char *pkg_name, const char *version,
                 binary_path ? binary_path : "/usr/local/bin");
         fclose(db);
         
-        printf("[APKM] 📝 Package %s %s registered in database\n", pkg_name, version);
+        printf("[APKM] Package %s %s registered in database\n", pkg_name, version);
         
         // Create manifest
         char manifest_path[512];
@@ -344,14 +264,14 @@ void register_installed_package(const char *pkg_name, const char *version,
             fclose(mf);
         }
     } else {
-        printf("[APKM] ⚠️ Cannot register package in database\n");
+        printf("[APKM] Cannot register package in database\n");
     }
 }
 
 // List installed packages
 void apkm_list_packages(void) {
-    printf("[APKM] 📋 Installed packages:\n");
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("[APKM] Installed packages:\n");
+    printf("========================================\n");
     
     FILE *db = fopen("/var/lib/apkm/packages.db", "r");
     if (!db) {
@@ -363,7 +283,7 @@ void apkm_list_packages(void) {
     int count = 0;
     
     printf(" %-20s %-12s %-10s %-20s\n", "NAME", "VERSION", "ARCH", "DATE");
-    printf(" ──────────────────────────────────────────────────\n");
+    printf(" -------------------------------------------------\n");
     
     while (fgets(line, sizeof(line), db)) {
         char name[256] = "";
@@ -377,7 +297,7 @@ void apkm_list_packages(void) {
                             name, version, arch, &timestamp, date_str, binary);
         
         if (parsed >= 5) {
-            printf(" • %-20s %-12s %-10s %-20s\n", name, version, arch, date_str);
+            printf(" * %-20s %-12s %-10s %-20s\n", name, version, arch, date_str);
             count++;
         }
     }
@@ -387,7 +307,7 @@ void apkm_list_packages(void) {
     if (count == 0) {
         printf("  No packages found\n");
     } else {
-        printf("\n 📊 Total: %d package(s) installed\n", count);
+        printf("\n Total: %d package(s) installed\n", count);
     }
 }
 
@@ -407,6 +327,8 @@ int apkm_install_package(const char *source, int is_github) {
         if (version_sep) {
             *version_sep = '\0';
             strncpy(pkg_version, version_sep + 1, sizeof(pkg_version) - 1);
+        } else {
+            strcpy(pkg_version, "latest");
         }
         
         // Download from GitHub
@@ -423,13 +345,7 @@ int apkm_install_package(const char *source, int is_github) {
                                sizeof(pkg_name), sizeof(pkg_version), sizeof(pkg_arch));
     }
     
-    printf("[APKM] 📦 Package: %s %s (%s)\n", pkg_name, pkg_version, pkg_arch);
-    
-    // Check if it's a BOOL archive
-    if (is_bool_archive(local_file)) {
-        printf("[APKM] 🔍 BOOL archive detected\n");
-        read_bool_header(local_file);
-    }
+    printf("[APKM] Package: %s %s (%s)\n", pkg_name, pkg_version, pkg_arch);
     
     // Staging directory
     const char *staging_path = "/tmp/apkm_install";
@@ -445,21 +361,26 @@ int apkm_install_package(const char *source, int is_github) {
     system(cmd_clean);
     
     // Extract package
-    printf("[APKM] 🔍 Extracting package...\n");
+    printf("[APKM] Extracting package...\n");
     
-    int extract_result = extract_bool_archive(local_file, staging_path);
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "tar -xzf '%s' -C '%s' 2>/dev/null", local_file, staging_path);
     
-    if (extract_result != 0) {
-        fprintf(stderr, "[APKM] ❌ Extraction failed\n");
-        if (is_github) unlink(local_file);
-        return -1;
+    if (system(cmd) != 0) {
+        // Try without compression
+        snprintf(cmd, sizeof(cmd), "tar -xf '%s' -C '%s' 2>/dev/null", local_file, staging_path);
+        if (system(cmd) != 0) {
+            fprintf(stderr, "[APKM] Extraction failed\n");
+            if (is_github) unlink(local_file);
+            return -1;
+        }
     }
     
     // Resolve dependencies
     resolve_dependencies(staging_path);
     
     // Find and execute installation script
-    printf("[APKM] ⚙️ Looking for installation script...\n");
+    printf("[APKM] Looking for installation script...\n");
     
     const char *scripts[] = {
         "install.sh",
@@ -478,7 +399,7 @@ int apkm_install_package(const char *source, int is_github) {
         snprintf(script_path, sizeof(script_path), "%s/%s", staging_path, scripts[i]);
         
         if (access(script_path, F_OK) == 0) {
-            printf("[APKM] ⚙️ Executing %s...\n", scripts[i]);
+            printf("[APKM] Executing %s...\n", scripts[i]);
             chmod(script_path, 0755);
             
             char current_dir[1024];
@@ -490,25 +411,25 @@ int apkm_install_package(const char *source, int is_github) {
             chdir(current_dir);
             
             if (ret == 0) {
-                printf("[APKM] ✅ Script executed successfully\n");
+                printf("[APKM] Script executed successfully\n");
                 script_found = 1;
                 install_success = 1;
                 break;
             } else {
-                printf("[APKM] ⚠️ Script %s failed (code: %d)\n", scripts[i], ret);
+                printf("[APKM] Script %s failed (code: %d)\n", scripts[i], ret);
             }
         }
     }
     
     if (!script_found) {
-        printf("[APKM] ⚠️ No installation script found\n");
+        printf("[APKM] No installation script found\n");
         
         // Look for binary at root
         char binary_path[512];
         snprintf(binary_path, sizeof(binary_path), "%s/%s", staging_path, pkg_name);
         
         if (access(binary_path, F_OK) == 0) {
-            printf("[APKM] 📦 Binary found at root, installing directly\n");
+            printf("[APKM] Binary found at root, installing directly\n");
             char cmd[1024];
             snprintf(cmd, sizeof(cmd), 
                      "cp '%s' /usr/local/bin/ && chmod 755 /usr/local/bin/%s", 
@@ -521,7 +442,7 @@ int apkm_install_package(const char *source, int is_github) {
         // Look in usr/bin/
         snprintf(binary_path, sizeof(binary_path), "%s/usr/bin/%s", staging_path, pkg_name);
         if (access(binary_path, F_OK) == 0) {
-            printf("[APKM] 📦 Binary found in usr/bin/, installing\n");
+            printf("[APKM] Binary found in usr/bin/, installing\n");
             char cmd[1024];
             snprintf(cmd, sizeof(cmd), 
                      "cp '%s' /usr/local/bin/ && chmod 755 /usr/local/bin/%s", 
@@ -540,7 +461,7 @@ int apkm_install_package(const char *source, int is_github) {
     }
     
     // Cleanup
-    printf("[APKM] 🧹 Cleaning up...\n");
+    printf("[APKM] Cleaning up...\n");
     snprintf(cmd_clean, sizeof(cmd_clean), "rm -rf %s", staging_path);
     system(cmd_clean);
     
@@ -549,20 +470,20 @@ int apkm_install_package(const char *source, int is_github) {
     }
     
     if (install_success) {
-        printf("[APKM] ✅ Installation completed successfully!\n");
-        printf("[APKM] 👉 Try: %s --version\n", pkg_name);
+        printf("[APKM] Installation completed successfully!\n");
+        printf("[APKM] Try: %s --version\n", pkg_name);
         return 0;
     } else {
-        printf("[APKM] ❌ Installation failed\n");
+        printf("[APKM] Installation failed\n");
         return -1;
     }
 }
 
 // Print help
 void print_help(void) {
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("============================================================\n");
     printf("  APKM - Advanced Package Manager (Gopu.inc Edition) v2.0\n");
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
+    printf("============================================================\n\n");
     printf("USAGE:\n");
     printf("  apkm <COMMAND> [OPTIONS]\n\n");
     printf("COMMANDS:\n");
@@ -571,8 +492,7 @@ void print_help(void) {
     printf("  list                     List installed packages\n");
     printf("  sync                     Sync Alpine database\n");
     printf("  audit                    Security audit\n");
-    printf("  rollback                 Rollback to previous ref\n");
-    printf("  header <file>            Show BOOL package header\n\n");
+    printf("  rollback                 Rollback to previous ref\n\n");
     printf("OPTIONS:\n");
     printf("  -j, --json               JSON output\n");
     printf("  -t, --toml               TOML output\n");
@@ -580,8 +500,7 @@ void print_help(void) {
     printf("EXAMPLES:\n");
     printf("  apkm install package-v1.0.0.tar.bool\n");
     printf("  apkm install super-app@2.1.0\n");
-    printf("  apkm header package.tar.bool\n");
-    printf("  head -1 package.tar.bool  (shows BOOL magic)\n\n");
+    printf("  apkm list\n\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -606,7 +525,7 @@ int main(int argc, char *argv[]) {
     // Command routing
     if (strcmp(command, "install") == 0) {
         if (argc < 3) {
-            fprintf(stderr, "[APKM] ❌ Specify a package or file\n");
+            fprintf(stderr, "[APKM] Specify a package or file\n");
             return 1;
         }
         
@@ -616,11 +535,8 @@ int main(int argc, char *argv[]) {
         // Check if it's a GitHub package (contains @)
         if (strchr(source, '@') != NULL) {
             is_github = 1;
-        } else if (strstr(source, ".tar.bool") == NULL) {
+        } else if (strstr(source, ".tar.bool") == NULL && strstr(source, "/") == NULL) {
             // Assume it's a package name without version
-            char temp[256];
-            snprintf(temp, sizeof(temp), "%s@latest", source);
-            source = temp;
             is_github = 1;
         }
         
@@ -629,37 +545,19 @@ int main(int argc, char *argv[]) {
     else if (strcmp(command, "list") == 0) {
         apkm_list_packages();
     }
-    else if (strcmp(command, "header") == 0) {
-        if (argc < 3) {
-            fprintf(stderr, "[APKM] ❌ Specify a file\n");
-            return 1;
-        }
-        read_bool_header(argv[2]);
-    }
     else if (strcmp(command, "sync") == 0) {
         sync_alpine_db(fmt);
     }
     else if (strcmp(command, "audit") == 0) {
-        printf("[APKM] 🛡️ CVE analysis and integrity scan...\n");
-        printf("[APKM] ✅ Audit completed (simulation)\n");
+        printf("[APKM] CVE analysis and integrity scan...\n");
+        printf("[APKM] Audit completed (simulation)\n");
     }
     else if (strcmp(command, "rollback") == 0) {
-        printf("[APKM] ⏪ Rolling back to previous version...\n");
-        printf("[APKM] ✅ Rollback completed (simulation)\n");
-    }
-    else if (strcmp(command, "register") == 0) {
-        if (argc < 4) {
-            printf("Usage: apkm register <name> <version> [arch]\n");
-            return 1;
-        }
-        char *name = argv[2];
-        char *version = argv[3];
-        char *arch = (argc > 4) ? argv[4] : "x86_64";
-        register_installed_package(name, version, arch, "/usr/local/bin");
-        printf("[APKM] ✅ Package %s %s registered manually\n", name, version);
+        printf("[APKM] Rolling back to previous version...\n");
+        printf("[APKM] Rollback completed (simulation)\n");
     }
     else {
-        fprintf(stderr, "[APKM] ❌ Unknown command: %s\n", command);
+        fprintf(stderr, "[APKM] Unknown command: %s\n", command);
         fprintf(stderr, "Use 'apkm --help' to see available commands\n");
         return 1;
     }
