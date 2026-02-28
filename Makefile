@@ -36,7 +36,7 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.c
 # Compiler les outils séparément
 tools:
 	@echo "🔧 Compilation des outils..."
-	$(CC) $(CFLAGS) -o $(BINDIR)/apsm src/auth.c src/apsm.c $(LIBS)
+	$(CC) $(CFLAGS) -o $(BINDIR)/apsm src/security.c src/auth.c src/apsm.c $(LIBS)
 	$(CC) $(CFLAGS) -o $(BINDIR)/bool src/bool.c $(LIBS)
 	@echo "✅ Outils compilés dans $(BINDIR)/"
 
