@@ -310,11 +310,9 @@ int main(int argc, char *argv[]) {
         }
         apkm_install_bool(argv[2]);
     } 
-
-  else if (strcmp(command, "list") == 0) {
+    else if (strcmp(command, "list") == 0) {
     apkm_list_packages();
-}
- else {
+} else {
         printf("  Aucun paquet APKM installé\n");
     }
 }
