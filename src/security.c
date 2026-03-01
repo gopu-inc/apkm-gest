@@ -14,12 +14,96 @@ int security_init(void) {
     mkdir("/usr/local/share/apkm/PROTOCOLE/security/tokens", 0755);
     mkdir("/usr/local/share/apkm/PROTOCOLE/security/signatures", 0755);
     
-    // Vérifier si le token existe
-    if (access(TOKEN_PATH, F_OK) != 0) {
-        security_download_token();
+    return 0;
+}
+
+// Charger le token (déchiffré) - usage interne
+int security_load_token(security_token_t *token) {
+    memset(token, 0, sizeof(security_token_t));
+    
+    FILE *f = fopen(TOKEN_PATH, "r");
+    if (!f) return -1;
+    
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        char *ptr = strstr(line, "TOKEN=");
+        if (ptr) {
+            strncpy(token->token, ptr + 6, sizeof(token->token) - 1);
+            token->token[strcspn(token->token, "\n\r")] = 0;
+            
+            // Déchiffrer le token
+            btscrypt_process(token->token, 0);
+            
+            token->last_update = time(NULL);
+            token->validated = 1;
+            break;
+        }
+    }
+    fclose(f);
+    
+    return strlen(token->token) > 0 ? 0 : -1;
+}
+
+// NOUVEAU: Obtenir le token (le charge à chaque appel)
+int security_get_token(char *token_buffer, size_t buffer_size) {
+    security_token_t token;
+    
+    if (security_load_token(&token) != 0) {
+        return -1;
     }
     
+    strncpy(token_buffer, token.token, buffer_size - 1);
+    token_buffer[buffer_size - 1] = '\0';
+    
+    // Effacer immédiatement de la mémoire locale
+    memset(&token, 0, sizeof(token));
+    
     return 0;
+}
+
+// NOUVEAU: Effacer le token de la mémoire
+int security_clear_token(void) {
+    // Rien à faire car on ne garde pas en mémoire
+    return 0;
+}
+
+// Sauvegarder le token (chiffré)
+int security_save_token(const security_token_t *token) {
+    mkdir(SECURITY_PATH "/tokens", 0755);
+    
+    char encrypted_token[512];
+    strncpy(encrypted_token, token->token, sizeof(encrypted_token) - 1);
+    encrypted_token[sizeof(encrypted_token) - 1] = '\0';
+    
+    // Chiffrer
+    btscrypt_process(encrypted_token, 1);
+    
+    FILE *f = fopen(TOKEN_PATH, "w");
+    if (!f) return -1;
+    
+    fprintf(f, "TOKEN=%s\n", encrypted_token);
+    fprintf(f, "# Generated: %lld\n", (long long)token->last_update);
+    fclose(f);
+    
+    chmod(TOKEN_PATH, 0600);
+    return 0;
+}
+
+// Télécharger le token depuis GitHub
+int security_download_token(void) {
+    char url[512];
+    snprintf(url, sizeof(url), "%s/.config.cfg", REPO_RAW);
+    
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), 
+             "wget -q -O %s %s 2>/dev/null || curl -s -o %s %s", 
+             TOKEN_PATH, url, TOKEN_PATH, url);
+    
+    if (system(cmd) == 0 && access(TOKEN_PATH, F_OK) == 0) {
+        chmod(TOKEN_PATH, 0600);
+        return 0;
+    }
+    return -1;
 }
 
 // Calculer SHA256 d'un fichier
@@ -49,74 +133,21 @@ int calculate_sha256(const char *filepath, char *output) {
     return 0;
 }
 
-// Télécharger le token depuis GitHub
-int security_download_token(void) {
-    char url[512];
-    snprintf(url, sizeof(url), "%s/.config.cfg", REPO_RAW);
-    
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), 
-             "wget -q -O %s %s 2>/dev/null || curl -s -o %s %s", 
-             TOKEN_PATH, url, TOKEN_PATH, url);
-    
-    if (system(cmd) == 0 && access(TOKEN_PATH, F_OK) == 0) {
-        chmod(TOKEN_PATH, 0600);
-        return 0;
-    }
-    return -1;
-}
-
-// Charger le token (déchiffré)
-int security_load_token(security_token_t *token) {
-    memset(token, 0, sizeof(security_token_t));
-    
-    FILE *f = fopen(TOKEN_PATH, "r");
-    if (!f) {
-        if (security_download_token() != 0) {
-            return -1;
-        }
-        f = fopen(TOKEN_PATH, "r");
-        if (!f) return -1;
-    }
-    
-    char line[1024];
-    while (fgets(line, sizeof(line), f)) {
-        char *ptr = strstr(line, "TOKEN=");
-        if (ptr) {
-            strncpy(token->token, ptr + 6, sizeof(token->token) - 1);
-            token->token[strcspn(token->token, "\n\r")] = 0;
-            
-            // Déchiffrer le token
-            btscrypt_process(token->token, 0);
-            
-            token->last_update = time(NULL);
-            token->validated = 1;
-            break;
+// Échapper une chaîne pour JSON
+char* escape_json(const char *str, char *output, size_t output_size) {
+    size_t j = 0;
+    for (size_t i = 0; str[i] && j < output_size - 1; i++) {
+        switch (str[i]) {
+            case '"':  output[j++] = '\\'; output[j++] = '"'; break;
+            case '\\': output[j++] = '\\'; output[j++] = '\\'; break;
+            case '\b': output[j++] = '\\'; output[j++] = 'b'; break;
+            case '\f': output[j++] = '\\'; output[j++] = 'f'; break;
+            case '\n': output[j++] = '\\'; output[j++] = 'n'; break;
+            case '\r': output[j++] = '\\'; output[j++] = 'r'; break;
+            case '\t': output[j++] = '\\'; output[j++] = 't'; break;
+            default:   output[j++] = str[i]; break;
         }
     }
-    fclose(f);
-    
-    return strlen(token->token) > 0 ? 0 : -1;
-}
-
-// Sauvegarder le token (chiffré)
-int security_save_token(const security_token_t *token) {
-    mkdir(SECURITY_PATH "/tokens", 0755);
-    
-    char encrypted_token[512];
-    strncpy(encrypted_token, token->token, sizeof(encrypted_token) - 1);
-    encrypted_token[sizeof(encrypted_token) - 1] = '\0';
-    
-    // Chiffrer
-    btscrypt_process(encrypted_token, 1);
-    
-    FILE *f = fopen(TOKEN_PATH, "w");
-    if (!f) return -1;
-    
-    fprintf(f, "TOKEN=%s\n", encrypted_token);
-    fprintf(f, "# Generated: %lld\n", (long long)token->last_update);
-    fclose(f);
-    
-    chmod(TOKEN_PATH, 0600);
-    return 0;
+    output[j] = '\0';
+    return output;
 }
