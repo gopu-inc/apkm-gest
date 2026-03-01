@@ -31,7 +31,7 @@ struct curl_response {
 };
 
 // ============================================================================
-// PROTOTYPES DES FONCTIONS EXTERNES (définies dans core.c)
+// DÉCLARATIONS EXTERNES
 // ============================================================================
 
 extern int extract_package(const char *filepath, const char *dest_path);
@@ -44,6 +44,12 @@ extern int db_search_packages(const char *pattern, package_t *results, int max_r
 extern int db_list_installed(package_t *results, int max_results);
 extern package_t* db_get_package(const char *name, const char *version);
 extern int download_package(const char *name, const char *version, const char *output_path);
+
+// Déclarations Zarch (provenant de zarch.c)
+extern int zarch_download(const char* name, const char* version, const char* arch, const char* output_path);
+extern int zarch_search(const char* query, zarch_package_t* results, int max_results);
+extern int zarch_list_repos(output_format_t format);
+extern int zarch_login(const char *username, const char *password, char *token, size_t token_size);
 
 // ============================================================================
 // CALLBACKS CURL
@@ -67,10 +73,6 @@ static size_t response_callback(void *ptr, size_t size, size_t nmemb, void *user
     return total;
 }
 
-// ============================================================================
-// BARRE DE PROGRESSION
-// ============================================================================
-
 static void show_progress(double percentage, const char *filename, double speed) {
     int bar_width = PROGRESS_WIDTH;
     int pos = (int)(percentage * bar_width / 100.0);
@@ -93,7 +95,8 @@ static void show_progress(double percentage, const char *filename, double speed)
 
 static int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
                               curl_off_t ultotal, curl_off_t ulnow) {
-    (void)ultotal; (void)ulnow;
+    (void)ultotal;
+    (void)ulnow;
     
     download_context_t *ctx = (download_context_t *)clientp;
     
@@ -114,47 +117,6 @@ static int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow
         }
     }
     return 0;
-}
-
-// ============================================================================
-// ZARCH FUNCTIONS (implémentées ici pour éviter les duplications)
-// ============================================================================
-
-int zarch_download(const char* name, const char* version, const char* arch, const char* output_path) {
-    (void)arch;
-    return download_package(name, version, output_path);
-}
-
-int zarch_search(const char* query, zarch_package_t* results, int max_results) {
-    package_t pkgs[MAX_RESULTS];
-    int count = db_search_packages(query, pkgs, max_results);
-    
-    for (int i = 0; i < count && i < max_results; i++) {
-        strcpy(results[i].name, pkgs[i].name);
-        strcpy(results[i].version, pkgs[i].version);
-        strcpy(results[i].architecture, pkgs[i].architecture);
-        results[i].downloads = 0;
-    }
-    
-    return count;
-}
-
-int zarch_list_repos(output_format_t format) {
-    if (format == OUTPUT_JSON) {
-        printf("[{\"name\":\"apkm-gest\",\"url\":\"https://github.com/gopu-inc/apkm-gest\"}]\n");
-    } else {
-        printf("\n📦 ZARCH HUB REPOSITORIES\n");
-        printf("═══════════════════════════════════════════\n");
-        printf(" • apkm-gest (default)\n");
-        printf("═══════════════════════════════════════════\n");
-    }
-    return 0;
-}
-
-int zarch_login(const char *username, const char *password, char *token, size_t token_size) {
-    (void)username; (void)password; (void)token; (void)token_size;
-    printf("[ZARCH] Login not implemented in this version\n");
-    return -1;
 }
 
 // ============================================================================
@@ -195,7 +157,6 @@ static int cmd_install(const char *source) {
     
     printf("[APKM] Installing %s %s (%s) from Zarch Hub\n", name, version, arch);
     
-    // Vérifier si la base de données est à jour
     struct stat st;
     char db_path[512];
     snprintf(db_path, sizeof(db_path), "%s/packages.db", APKM_DB_PATH);
@@ -383,8 +344,9 @@ int main(int argc, char *argv[]) {
     output_format_t format = OUTPUT_TEXT;
 
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--json") == 0 || strcmp(argv[i], "-j") == 0)
+        if (strcmp(argv[i], "--json") == 0 || strcmp(argv[i], "-j") == 0) {
             format = OUTPUT_JSON;
+        }
     }
 
     if (strcmp(command, "install") == 0) {
@@ -424,6 +386,4 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Try 'apkm --help'\n");
         return 1;
     }
-
-    return 0;
 }
