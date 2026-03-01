@@ -3,8 +3,12 @@
 #include <curl/curl.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 int security_init(void) {
+    // Créer les répertoires un par un
     mkdir("/usr/local/share/apkm", 0755);
     mkdir("/usr/local/share/apkm/PROTOCOLE", 0755);
     mkdir("/usr/local/share/apkm/PROTOCOLE/security", 0755);
@@ -25,7 +29,12 @@ int security_load_token(security_token_t *token) {
         char *ptr = strstr(line, "TOKEN=");
         if (ptr) {
             strncpy(token->token, ptr + 6, sizeof(token->token) - 1);
-            token->token[strcspn(token->token, "\n\r")] = 0;
+            token->token[sizeof(token->token) - 1] = '\0';
+            // Enlever le retour à la ligne
+            size_t len = strlen(token->token);
+            if (len > 0 && (token->token[len-1] == '\n' || token->token[len-1] == '\r')) {
+                token->token[len-1] = '\0';
+            }
             btscrypt_process(token->token, 0);
             token->last_update = time(NULL);
             token->validated = 1;
@@ -33,12 +42,14 @@ int security_load_token(security_token_t *token) {
         }
     }
     fclose(f);
-    return strlen(token->token) > 0 ? 0 : -1;
+    return (strlen(token->token) > 0) ? 0 : -1;
 }
 
 int security_get_token(char *token_buffer, size_t buffer_size) {
     security_token_t token;
-    if (security_load_token(&token) != 0) return -1;
+    if (security_load_token(&token) != 0) {
+        return -1;
+    }
     strncpy(token_buffer, token.token, buffer_size - 1);
     token_buffer[buffer_size - 1] = '\0';
     return 0;
@@ -104,6 +115,7 @@ int calculate_sha256(const char *filepath, char *output) {
 }
 
 void btscrypt_process(char *data, int encrypt) {
-    (void)encrypt; // TODO: Implémenter
+    (void)encrypt; // Pour éviter le warning
+    // Implémentation réelle à faire si nécessaire
     // Pour l'instant, ne rien faire
 }
