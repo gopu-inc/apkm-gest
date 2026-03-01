@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "apkm.h"
 #include <pthread.h>
 #include <semaphore.h>
@@ -20,6 +24,19 @@
 #include <archive.h>
 #include <archive_entry.h>
 
+
+
+#ifndef SIG_BLOCK
+#define SIG_BLOCK 0
+#endif
+
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 1
+#endif
+
+#ifndef TFD_CLOEXEC
+#define TFD_CLOEXEC 02000000
+#endif
 
 // Définitions des structures manquantes
 typedef struct {
