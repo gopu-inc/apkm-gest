@@ -12,6 +12,17 @@
 #define MAX_DOC_SIZE 16384
 #define MAX_ASSETS 50
 
+// Prototypes des fonctions
+int create_github_release(const char *token, const char *tag, const char *name,
+                          const char *version, const char *release,
+                          const char *arch, const char *sha256,
+                          const char *doc_content, char *upload_url, size_t upload_url_size);
+int upload_asset(const char *token, const char *upload_url, const char *filepath, 
+                 const char *filename, const char *content_type);
+int update_database(const char *token, const char *name, const char *version,
+                    const char *release, const char *arch, const char *sha256,
+                    const char *tag);
+
 // Structure pour la réponse curl
 struct curl_response {
     char *data;
