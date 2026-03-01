@@ -18,15 +18,19 @@ team created new release logiciel
 #define APKM_CODENAME "Zarch Edition"
 
 // Zarch Hub Configuration
-#define ZARCH_HUB_URL "https://zenv-hub.onrender.com"
+#define ZARCH_HUB_URL "https://gsql-badge.onrender.com"
 #define ZARCH_API_URL ZARCH_HUB_URL "/api"
 #define ZARCH_PACKAGE_URL ZARCH_HUB_URL "/package/download"
 
-// GitHub uniquement pour DATA.db (liste des dépôts)
+// GitHub uniquement pour DATA.db
 #define GITHUB_REPO_OWNER "Mauricio-100"
 #define GITHUB_REPO_NAME "apkm-gest"
 #define GITHUB_RAW_URL "https://raw.githubusercontent.com/" GITHUB_REPO_OWNER "/" GITHUB_REPO_NAME "/main"
-#define GITHUB_API_URL "https://api.github.com/repos/" GITHUB_REPO_OWNER "/" GITHUB_REPO_NAME
+
+// Alpine DB Path
+#define ALPINE_DB_PATH "/lib/apk/db/installed"
+#define APKM_DB_PATH "/var/lib/apkm"
+#define APKM_SANDBOX_PATH "/tmp/apkm_sandbox"
 
 // Formats de sortie
 typedef enum {
@@ -34,9 +38,7 @@ typedef enum {
     OUTPUT_JSON,
     OUTPUT_TOML,
     OUTPUT_YAML,
-    OUTPUT_CSV,
-    OUTPUT_HTML,
-    OUTPUT_MARKDOWN
+    OUTPUT_CSV
 } output_format_t;
 
 // Niveaux de sécurité
@@ -46,17 +48,6 @@ typedef enum {
     SECURITY_HIGH,
     SECURITY_PARANOID
 } security_level_t;
-
-// États d'un paquet
-typedef enum {
-    PKG_STATE_UNKNOWN,
-    PKG_STATE_INSTALLED,
-    PKG_STATE_PENDING,
-    PKG_STATE_FAILED,
-    PKG_STATE_BROKEN,
-    PKG_STATE_LOCKED,
-    PKG_STATE_OBSOLETE
-} package_state_t;
 
 // Structure d'un paquet
 typedef struct {
@@ -72,7 +63,7 @@ typedef struct {
     uint64_t size;
     time_t build_date;
     time_t install_date;
-    package_state_t state;
+    int state;
     char** dependencies;
     int dep_count;
 } package_t;
@@ -88,35 +79,46 @@ typedef struct {
     uint64_t size;
     int downloads;
     char updated_at[32];
-    char download_url[512];
 } zarch_package_t;
 
 // Callbacks
 typedef void (*progress_callback_t)(const char* operation, int percent);
 typedef void (*error_callback_t)(const char* error, int code);
+typedef void (*log_callback_t)(const char* message, int level);
 
-// Prototypes
+// Prototypes des fonctions principales
 int apkm_init(security_level_t security, progress_callback_t progress_cb, error_callback_t error_cb);
 int apkm_install(const char* source);
 int apkm_install_local(const char* filepath);
-int apkm_remove(const char* package);
 int apkm_list(void);
-int apkm_search(const char* pattern, output_format_t format);
-int apkm_info(const char* package);
+int apkm_search(const char* query, output_format_t format);
+int apkm_repos(output_format_t format);
 int apkm_update(void);
 
 // Zarch functions
 int zarch_download(const char* name, const char* version, const char* arch, const char* output_path);
 int zarch_search(const char* query, zarch_package_t* results, int max_results);
 int zarch_list_repos(output_format_t format);
+int zarch_login(const char *username, const char *password, char *token, size_t token_size);
 
-// GitHub functions (uniquement pour DATA.db)
+// GitHub functions
 int github_fetch_database(char* buffer, size_t buffer_size);
-int github_update_database(const char* token, const char* entry);
 
 // Crypto et sécurité
 char* load_token_from_home(void);
 void btscrypt_process(char *data, int encrypt);
 int calculate_sha256(const char *filepath, char *output);
+int security_init(void);
+int security_get_token(char *token_buffer, size_t buffer_size);
+int security_save_token(const security_token_t *token);
+
+// Alpine functions
+void sync_alpine_db(output_format_t format);
+void resolve_dependencies(const char *staging_path);
+
+// Sandbox functions
+int apkm_sandbox_init(const char *target_path);
+int apkm_sandbox_create(const char* path, int enable_network, int enable_mount);
+int apkm_sandbox_lockdown(void);
 
 #endif
