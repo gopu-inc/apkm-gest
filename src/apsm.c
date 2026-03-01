@@ -195,8 +195,7 @@ char* load_documentation(char *buffer, size_t buffer_size) {
     
     return buffer;
 }
-
-// Extraire les infos du package depuis le nom de fichier
+// gere le parser de fichier tres important 
 void parse_package_filename(const char *filename, char *name, char *version, 
                             char *release, char *arch, char *suffix) {
     char temp[512];
@@ -217,41 +216,40 @@ void parse_package_filename(const char *filename, char *name, char *version,
     strncpy(name, base, name_len);
     name[name_len] = '\0';
     
-    char *release_start = strstr(version_start + 2, "-");
+    // Chercher le format avec suffixe ( -r1, -r2, etc.)
+    char *release_start = strstr(version_start + 2, "-r");
     if (release_start) {
         int ver_len = release_start - (version_start + 2);
         strncpy(version, version_start + 2, ver_len);
         version[ver_len] = '\0';
         
-        if (release_start[1] >= 'a' && release_start[1] <= 'z') {
-            suffix[0] = release_start[1];
-            suffix[1] = '\0';
+        // Préserver le 'r' dans le suffixe
+        suffix[0] = 'r';
+        suffix[1] = '\0';
+        
+        char *arch_start = strchr(release_start + 2, '.');
+        if (arch_start) {
+            int rel_len = arch_start - (release_start + 2);
+            strncpy(release, release_start + 2, rel_len);
+            release[rel_len] = '\0';
             
-            char *arch_start = strchr(release_start + 2, '.');
-            if (arch_start) {
-                int rel_len = arch_start - (release_start + 2);
-                strncpy(release, release_start + 2, rel_len);
-                release[rel_len] = '\0';
-                
-                strncpy(arch, arch_start + 1, 31);
-                arch[31] = '\0';
-            }
+            strncpy(arch, arch_start + 1, 31);
+            arch[31] = '\0';
         }
     } else {
+        // Format sans suffixe
         char *arch_start = strchr(version_start + 2, '.');
         if (arch_start) {
             int ver_len = arch_start - (version_start + 2);
             strncpy(version, version_start + 2, ver_len);
             version[ver_len] = '\0';
-            
             strcpy(release, "0");
-            strcpy(suffix, "r");
+            strcpy(suffix, "");
             strncpy(arch, arch_start + 1, 31);
             arch[31] = '\0';
         }
     }
 }
-
 // Créer une release sur GitHub (VERSION UNIQUE)
 int create_github_release(const char *token, const char *tag, const char *name,
                           const char *version, const char *release,
@@ -522,9 +520,14 @@ int publish_package(const char *filepath) {
         return -1;
     }
     
-    char filename[256];
+char filename[256];
+if (suffix[0] == 'r') {
+    snprintf(filename, sizeof(filename), "%s-v%s-r%s.%s.tar.bool", 
+             name, version, release, arch);
+} else {
     snprintf(filename, sizeof(filename), "%s-v%s-%s.%s.tar.bool", 
              name, version, release, arch);
+}
     
     if (upload_asset(token.token, upload_url, filepath, filename,
                      "Content-Type: application/octet-stream") != 0) {

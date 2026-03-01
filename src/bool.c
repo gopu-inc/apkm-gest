@@ -408,8 +408,8 @@ int build_package(apkm_build_t *b) {
     
     char archive_name[512];
     snprintf(archive_name, sizeof(archive_name), 
-             "build/%s-v%s-%s.%s.tar.bool", 
-             b->name, b->version, b->release, b->arch);
+         "build/%s-v%s-r1.%s.tar.bool", 
+         b->name, b->version, b->arch);
     
     // S'assurer que le répertoire build existe
     mkdir("build", 0755);
