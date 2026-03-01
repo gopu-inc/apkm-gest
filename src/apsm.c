@@ -6,22 +6,12 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <libgen.h>
+#include <json-c/json.h>
 #include "apkm.h"
 #include "security.h"
 
 #define MAX_DOC_SIZE 16384
-#define MAX_ASSETS 50
-
-// Prototypes des fonctions
-int create_github_release(const char *token, const char *tag, const char *name,
-                          const char *version, const char *release,
-                          const char *arch, const char *sha256,
-                          const char *doc_content, char *upload_url, size_t upload_url_size);
-int upload_asset(const char *token, const char *upload_url, const char *filepath, 
-                 const char *filename, const char *content_type);
-int update_database(const char *token, const char *name, const char *version,
-                    const char *release, const char *arch, const char *sha256,
-                    const char *tag);
+#define UPLOAD_CHUNK_SIZE 8192
 
 // Structure pour la réponse curl
 struct curl_response {
@@ -29,17 +19,21 @@ struct curl_response {
     size_t size;
 };
 
-// Structure pour les assets
+// Structure pour la progression d'upload
 typedef struct {
-    char name[256];
-    char url[1024];
-    char arch[32];
-    char release[16];
-    char version[64];
-    char pkg_name[128];
-} github_asset_t;
+    double last_progress;
+    char filename[256];
+    time_t start_time;
+    double upload_speed;
+    curl_off_t last_ulnow;
+    time_t last_time;
+    long total_size;
+} upload_context_t;
 
-// Callback pour écrire la réponse
+// ============================================================================
+// Callbacks curl
+// ============================================================================
+
 static size_t write_callback(void *ptr, size_t size, size_t nmemb, void *userdata) {
     struct curl_response *resp = (struct curl_response *)userdata;
     size_t total = size * nmemb;
@@ -54,7 +48,56 @@ static size_t write_callback(void *ptr, size_t size, size_t nmemb, void *userdat
     return total;
 }
 
-// Nettoyer une chaîne
+// Barre de progression pour upload
+void show_upload_progress(double percentage, const char *filename, double speed) {
+    int bar_width = 50;
+    int pos = (int)(percentage * bar_width / 100.0);
+    
+    printf("\r[");
+    for (int i = 0; i < bar_width; i++) {
+        if (i < pos) printf("=");
+        else if (i == pos && percentage < 100.0) printf(">");
+        else printf(" ");
+    }
+    
+    if (percentage >= 100.0) {
+        printf("] %3.0f%% %s - Complete        \n", percentage, filename);
+    } else {
+        printf("] %3.0f%% %s - %.1f KB/s      ", 
+               percentage, filename, speed / 1024.0);
+    }
+    fflush(stdout);
+}
+
+int upload_progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
+                              curl_off_t ultotal, curl_off_t ulnow) {
+    (void)dltotal; (void)dlnow;
+    
+    upload_context_t *ctx = (upload_context_t *)clientp;
+    
+    if (ctx->total_size > 0) {
+        double percentage = (double)ulnow / (double)ctx->total_size * 100.0;
+        
+        time_t now = time(NULL);
+        if (now > ctx->last_time) {
+            curl_off_t diff = ulnow - ctx->last_ulnow;
+            ctx->upload_speed = (double)diff / (now - ctx->last_time);
+            ctx->last_ulnow = ulnow;
+            ctx->last_time = now;
+        }
+        
+        if (percentage - ctx->last_progress >= 1.0 || percentage >= 100.0) {
+            show_upload_progress(percentage, ctx->filename, ctx->upload_speed);
+            ctx->last_progress = percentage;
+        }
+    }
+    return 0;
+}
+
+// ============================================================================
+// Utilitaires
+// ============================================================================
+
 void clean_string(char *str) {
     int len = strlen(str);
     if (len >= 2 && str[0] == '"' && str[len-1] == '"') {
@@ -73,124 +116,9 @@ void clean_string(char *str) {
     }
 }
 
-// Charger la documentation depuis APKMBUILD ou README
-char* load_documentation(char *buffer, size_t buffer_size) {
-    buffer[0] = '\0';
-    
-    // Chercher APKMBUILD
-    if (access("APKMBUILD", F_OK) == 0) {
-        FILE *fp = fopen("APKMBUILD", "r");
-        if (fp) {
-            char line[1024];
-            int in_doc_block = 0;
-            char doc_content[8192] = "";
-            
-            while (fgets(line, sizeof(line), fp)) {
-                line[strcspn(line, "\n")] = 0;
-                
-                if (strstr(line, "$APKMDOC::")) {
-                    char *val = strstr(line, "::") + 2;
-                    strcpy(doc_content, val);
-                    clean_string(doc_content);
-                    
-                    // Vérifier le format spécial [%OPEN+==fichier]
-                    char *open_marker = strstr(doc_content, "[%OPEN+==");
-                    if (open_marker) {
-                        char *file_start = open_marker + 9;
-                        char *file_end = strchr(file_start, ']');
-                        if (file_end) {
-                            int file_len = file_end - file_start;
-                            char filepath[512];
-                            strncpy(filepath, file_start, file_len);
-                            filepath[file_len] = '\0';
-                            
-                            FILE *rf = fopen(filepath, "r");
-                            if (rf) {
-                                size_t total = 0;
-                                char rline[256];
-                                while (fgets(rline, sizeof(rline), rf) && total < buffer_size - 1) {
-                                    size_t len = strlen(rline);
-                                    if (total + len < buffer_size - 1) {
-                                        strcpy(buffer + total, rline);
-                                        total += len;
-                                    }
-                                }
-                                fclose(rf);
-                                fclose(fp);
-                                return buffer;
-                            }
-                        }
-                    } else {
-                        strncpy(buffer, doc_content, buffer_size - 1);
-                        fclose(fp);
-                        return buffer;
-                    }
-                }
-                
-                if (strstr(line, "$APKMDOC::{")) {
-                    in_doc_block = 1;
-                    continue;
-                }
-                if (in_doc_block) {
-                    if (strstr(line, "}")) {
-                        in_doc_block = 0;
-                    } else {
-                        if (strlen(buffer) + strlen(line) + 1 < buffer_size) {
-                            strcat(buffer, line);
-                            strcat(buffer, "\n");
-                        }
-                    }
-                }
-            }
-            fclose(fp);
-        }
-    }
-    
-    // Si pas trouvé, chercher README.md
-    if (strlen(buffer) == 0) {
-        const char *readme_files[] = {
-            "README.md", "README", "readme.md",
-            "Readme.md", "README.txt", "README.rst",
-            "docs/README.md", "doc/README.md",
-            NULL
-        };
-        
-        for (int i = 0; readme_files[i] != NULL; i++) {
-            if (access(readme_files[i], F_OK) == 0) {
-                FILE *rf = fopen(readme_files[i], "r");
-                if (rf) {
-                    size_t total = 0;
-                    char rline[256];
-                    
-                    snprintf(buffer, buffer_size, "## Documentation from %s\n\n", readme_files[i]);
-                    total = strlen(buffer);
-                    
-                    while (fgets(rline, sizeof(rline), rf) && total < buffer_size - 1) {
-                        size_t len = strlen(rline);
-                        if (total + len < buffer_size - 1) {
-                            strcpy(buffer + total, rline);
-                            total += len;
-                        }
-                    }
-                    fclose(rf);
-                    break;
-                }
-            }
-        }
-    }
-    
-    if (strlen(buffer) == 0) {
-        snprintf(buffer, buffer_size, 
-                 "No documentation provided.\n"
-                 "Please refer to the project website for more information.\n");
-    }
-    
-    return buffer;
-}
-
 // Extraire les infos du package depuis le nom de fichier
 void parse_package_filename(const char *filename, char *name, char *version, 
-                            char *release, char *arch, char *suffix) {
+                            char *release, char *arch) {
     char temp[512];
     strncpy(temp, filename, sizeof(temp) - 1);
     temp[sizeof(temp) - 1] = '\0';
@@ -209,15 +137,11 @@ void parse_package_filename(const char *filename, char *name, char *version,
     strncpy(name, base, name_len);
     name[name_len] = '\0';
     
-    // Chercher le format avec suffixe ( -r1, -r2, etc.)
     char *release_start = strstr(version_start + 2, "-r");
     if (release_start) {
         int ver_len = release_start - (version_start + 2);
         strncpy(version, version_start + 2, ver_len);
         version[ver_len] = '\0';
-        
-        suffix[0] = 'r';
-        suffix[1] = '\0';
         
         char *arch_start = strchr(release_start + 2, '.');
         if (arch_start) {
@@ -229,171 +153,119 @@ void parse_package_filename(const char *filename, char *name, char *version,
             arch[31] = '\0';
         }
     } else {
-        // Format sans suffixe
         char *arch_start = strchr(version_start + 2, '.');
         if (arch_start) {
             int ver_len = arch_start - (version_start + 2);
-            
-            // Vérifier si la version contient déjà un tiret (comme 2.0.0-1)
-            char *dash_in_version = strstr(version_start + 2, "-");
-            if (dash_in_version && dash_in_version < arch_start) {
-                int dash_pos = dash_in_version - (version_start + 2);
-                strncpy(version, version_start + 2, dash_pos);
-                version[dash_pos] = '\0';
-                
-                strcpy(suffix, "");
-                int rel_len = arch_start - (dash_in_version + 1);
-                strncpy(release, dash_in_version + 1, rel_len);
-                release[rel_len] = '\0';
-            } else {
-                strncpy(version, version_start + 2, ver_len);
-                version[ver_len] = '\0';
-                strcpy(release, "0");
-                strcpy(suffix, "");
-            }
-            
+            strncpy(version, version_start + 2, ver_len);
+            version[ver_len] = '\0';
+            strcpy(release, "r0");
             strncpy(arch, arch_start + 1, 31);
             arch[31] = '\0';
         }
     }
 }
 
-// Créer une release sur GitHub
-int create_github_release(const char *token, const char *tag, const char *name,
-                          const char *version, const char *release,
-                          const char *arch, const char *sha256,
-                          const char *doc_content, char *upload_url, size_t upload_url_size) {
+// Charger la documentation
+char* load_documentation(char *buffer, size_t buffer_size) {
+    buffer[0] = '\0';
     
+    // Chercher README.md
+    const char *readme_files[] = {
+        "README.md", "README", "readme.md",
+        "Readme.md", "docs/README.md", NULL
+    };
+    
+    for (int i = 0; readme_files[i] != NULL; i++) {
+        if (access(readme_files[i], F_OK) == 0) {
+            FILE *rf = fopen(readme_files[i], "r");
+            if (rf) {
+                size_t total = 0;
+                char line[256];
+                
+                snprintf(buffer, buffer_size, "# Documentation\n\n");
+                total = strlen(buffer);
+                
+                while (fgets(line, sizeof(line), rf) && total < buffer_size - 1) {
+                    size_t len = strlen(line);
+                    if (total + len < buffer_size - 1) {
+                        strcpy(buffer + total, line);
+                        total += len;
+                    }
+                }
+                fclose(rf);
+                break;
+            }
+        }
+    }
+    
+    if (strlen(buffer) == 0) {
+        snprintf(buffer, buffer_size, "No documentation provided.");
+    }
+    
+    return buffer;
+}
+
+// ============================================================================
+// ZARCH HUB PUBLISHING
+// ============================================================================
+
+// Login à Zarch Hub
+int zarch_login(const char *username, const char *password, char *token, size_t token_size) {
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
     
     struct curl_response resp = {0};
     struct curl_slist *headers = NULL;
     
-    char auth_header[512];
-    snprintf(auth_header, sizeof(auth_header), "Authorization: token %s", token);
-    
     char url[512];
-    snprintf(url, sizeof(url), "https://api.github.com/repos/%s/%s/releases",
-             REPO_OWNER, REPO_NAME);
+    snprintf(url, sizeof(url), "%s/auth/login", ZARCH_API_URL);
     
-    // Échapper la documentation pour JSON
-    char doc_escaped[MAX_DOC_SIZE * 2] = "";
-    escape_json(doc_content, doc_escaped, sizeof(doc_escaped));
-    
-    time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
-    char date_str[64];
-    strftime(date_str, sizeof(date_str), "%Y-%m-%d %H:%M:%S", tm_info);
-    
-    // Construire le body
-    char body_text[MAX_DOC_SIZE * 2];
-    snprintf(body_text, sizeof(body_text),
-             "# %s %s\n\n"
-             "## Package Information\n"
-             "- **Version:** %s\n"
-             "- **Release:** %s\n"
-             "- **Architecture:** %s\n"
-             "- **SHA256:** `%s`\n"
-             "- **Published:** %s\n\n"
-             "## Documentation\n"
-             "%s\n\n"
-             "## Installation\n"
-             "```bash\n"
-             "apkm install %s@%s\n"
-             "```",
-             name, tag, version, release, arch, sha256, date_str,
-             doc_escaped, name, version);
-    
-    // Échapper le body
-    char body_escaped[MAX_DOC_SIZE * 4] = "";
-    escape_json(body_text, body_escaped, sizeof(body_escaped));
-    
-    // Construire le JSON final
-    char post_data[MAX_DOC_SIZE * 8];
+    char post_data[1024];
     snprintf(post_data, sizeof(post_data),
-             "{"
-             "\"tag_name\": \"%s\","
-             "\"target_commitish\": \"main\","
-             "\"name\": \"%s %s\","
-             "\"body\": \"%s\","
-             "\"draft\": false,"
-             "\"prerelease\": false"
-             "}", tag, name, tag, body_escaped);
+             "{\"username\":\"%s\",\"password\":\"%s\"}",
+             username, password);
     
-    headers = curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
     headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, auth_header);
-    headers = curl_slist_append(headers, "User-Agent: APSM-Publisher/2.0");
     
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
-    
-    printf("[APSM] 📦 Creating release %s...\n", tag);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     
     CURLcode res = curl_easy_perform(curl);
     
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    
-    if (res != CURLE_OK || http_code != 201) {
-        fprintf(stderr, "[APSM] ❌ Failed to create release (HTTP %ld)\n", http_code);
-        if (resp.data) {
-            fprintf(stderr, "Response: %s\n", resp.data);
-        }
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
-        free(resp.data);
-        return -1;
-    }
-    
-    // Extraire l'upload URL
-    char *upload_url_ptr = strstr(resp.data, "\"upload_url\":\"");
-    if (upload_url_ptr) {
-        upload_url_ptr += 14;
-        char *end = strchr(upload_url_ptr, '"');
-        if (end) {
-            int len = (int)(end - upload_url_ptr);
-            if (len < (int)upload_url_size - 1) {
-                strncpy(upload_url, upload_url_ptr, len);
-                upload_url[len] = '\0';
-                char *brace = strchr(upload_url, '{');
-                if (brace) *brace = '\0';
+    int success = -1;
+    if (res == CURLE_OK && resp.data) {
+        struct json_object *parsed = json_tokener_parse(resp.data);
+        if (parsed) {
+            struct json_object *token_obj;
+            if (json_object_object_get_ex(parsed, "token", &token_obj)) {
+                const char *token_str = json_object_get_string(token_obj);
+                strncpy(token, token_str, token_size - 1);
+                token[token_size - 1] = '\0';
+                success = 0;
             }
+            json_object_put(parsed);
         }
     }
-    
-    int release_id = 0;
-    char *id_ptr = strstr(resp.data, "\"id\":");
-    if (id_ptr) {
-        id_ptr += 5;
-        release_id = atoi(id_ptr);
-    }
-    
-    printf("[APSM] ✅ Release created (ID: %d)\n", release_id);
-    printf("[APSM] 🔗 https://github.com/%s/%s/releases/tag/%s\n", 
-           REPO_OWNER, REPO_NAME, tag);
     
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
     free(resp.data);
     
-    return release_id;
+    return success;
 }
 
-// Upload un asset vers une release
-int upload_asset(const char *token, const char *upload_url, const char *filepath, 
-                 const char *filename, const char *content_type) {
+// Upload du package vers Zarch Hub
+int zarch_upload_package(const char *token, const char *filepath, 
+                         const char *name, const char *version,
+                         const char *release, const char *arch) {
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
     
-    struct curl_response resp = {0};
-    struct curl_slist *headers = NULL;
     struct stat file_stat;
-    
     if (stat(filepath, &file_stat) != 0) {
         fprintf(stderr, "[APSM] ❌ File not found: %s\n", filepath);
         return -1;
@@ -405,429 +277,285 @@ int upload_asset(const char *token, const char *upload_url, const char *filepath
         return -1;
     }
     
-    char auth_header[512];
-    snprintf(auth_header, sizeof(auth_header), "Authorization: token %s", token);
+    char url[512];
+    snprintf(url, sizeof(url), "%s/package/upload/public/%s", ZARCH_API_URL, name);
     
-    char url[1024];
-    snprintf(url, sizeof(url), "%s?name=%s", upload_url, filename);
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Authorization: Bearer");
+    headers = curl_slist_append(headers, "Content-Type: multipart/form-data");
     
-    headers = curl_slist_append(headers, auth_header);
-    headers = curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
-    headers = curl_slist_append(headers, content_type);
-    headers = curl_slist_append(headers, "User-Agent: APSM-Publisher/2.0");
+    struct curl_httppost *formpost = NULL;
+    struct curl_httppost *lastptr = NULL;
+    
+    curl_formadd(&formpost, &lastptr,
+                 CURLFORM_COPYNAME, "file",
+                 CURLFORM_FILE, filepath,
+                 CURLFORM_CONTENTTYPE, "application/gzip",
+                 CURLFORM_END);
+    
+    curl_formadd(&formpost, &lastptr,
+                 CURLFORM_COPYNAME, "version",
+                 CURLFORM_COPYCONTENTS, version,
+                 CURLFORM_END);
+    
+    curl_formadd(&formpost, &lastptr,
+                 CURLFORM_COPYNAME, "release",
+                 CURLFORM_COPYCONTENTS, release,
+                 CURLFORM_END);
+    
+    curl_formadd(&formpost, &lastptr,
+                 CURLFORM_COPYNAME, "arch",
+                 CURLFORM_COPYCONTENTS, arch,
+                 CURLFORM_END);
+    
+    upload_context_t ctx = {
+        .last_progress = 0,
+        .last_time = time(NULL),
+        .last_ulnow = 0,
+        .total_size = file_stat.st_size
+    };
+    strncpy(ctx.filename, name, sizeof(ctx.filename) - 1);
     
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_READDATA, file);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)file_stat.st_size);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+    curl_easy_setopt(curl, CURLOPT_HTTPPOST, formpost);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, upload_progress_callback);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
     
-    printf("[APSM] 📤 Uploading %s (%.2f KB)...\n", 
-           filename, file_stat.st_size / 1024.0);
+    printf("[APSM] 📤 Uploading %s %s-%s (%s) - %.2f KB\n", 
+           name, version, release, arch, file_stat.st_size / 1024.0);
     
     CURLcode res = curl_easy_perform(curl);
     fclose(file);
     
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_formfree(formpost);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
     
-    if (res != CURLE_OK || http_code != 201) {
-        fprintf(stderr, "[APSM] ❌ Upload failed (HTTP %ld)\n", http_code);
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
-        free(resp.data);
+    if (res != CURLE_OK) {
+        fprintf(stderr, "\n[APSM] ❌ Upload failed: %s\n", curl_easy_strerror(res));
         return -1;
     }
     
-    printf("[APSM] ✅ Uploaded: %s\n", filename);
-    
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    free(resp.data);
-    
+    printf("\n[APSM] ✅ Upload complete\n");
     return 0;
 }
 
-// Mettre à jour DATA.db
-int update_database(const char *token, const char *name, const char *version,
-                    const char *release, const char *arch, const char *sha256,
-                    const char *tag) {
-    
-    char package_url[1024];
-    
-    // Construire l'URL avec le bon format (garder le r)
-    if (release[0] == 'r' || (release[0] >= '0' && release[0] <= '9')) {
-        snprintf(package_url, sizeof(package_url),
-                 "https://github.com/%s/%s/releases/download/%s/%s-v%s-%s.%s.tar.bool",
-                 REPO_OWNER, REPO_NAME, tag, name, version, release, arch);
-    } else {
-        snprintf(package_url, sizeof(package_url),
-                 "https://github.com/%s/%s/releases/download/%s/%s-v%s.%s.tar.bool",
-                 REPO_OWNER, REPO_NAME, tag, name, version, arch);
-    }
-    
-    // Télécharger DATA.db actuel
-    char cmd[2048];
-    snprintf(cmd, sizeof(cmd),
-             "curl -s %s/DATA.db > /tmp/DATA.db 2>/dev/null", REPO_RAW);
-    system(cmd);
-    
-    // Lire le fichier existant pour vérifier les doublons
-    FILE *old_db = fopen("/tmp/DATA.db", "r");
-    FILE *new_db = fopen("/tmp/DATA.new", "w");
-    
-    if (!new_db) {
-        if (old_db) fclose(old_db);
-        return -1;
-    }
-    
-    // Copier les anciennes entrées (sauf si c'est un doublon)
-    if (old_db) {
-        char line[1024];
-        int found = 0;
-        
-        while (fgets(line, sizeof(line), old_db)) {
-            char n[256], v[64];
-            if (sscanf(line, "%[^|]|%[^|]", n, v) == 2) {
-                if (strcmp(n, name) == 0 && strcmp(v, version) == 0) {
-                    found = 1;
-                    continue;  // Ne pas copier l'ancienne version
-                }
-            }
-            fputs(line, new_db);
-        }
-        fclose(old_db);
-        
-        if (found) {
-            printf("[APSM] 📝 Updating existing entry for %s %s\n", name, version);
-        }
-    }
-    
-    // Ajouter la nouvelle entrée
-    fprintf(new_db, "%s|%s|%s|%s|%lld|%s|%s\n", 
-            name, version, release, arch, (long long)time(NULL), sha256, package_url);
-    fclose(new_db);
-    
-    // Remplacer l'ancien fichier
-    rename("/tmp/DATA.new", "/tmp/DATA.db");
-    
-    // Lire le fichier et l'encoder en base64
-    FILE *f = fopen("/tmp/DATA.db", "rb");
-    if (!f) return -1;
-    
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    
-    unsigned char *buffer = malloc(fsize + 1);
-    if (!buffer) {
-        fclose(f);
-        return -1;
-    }
-    
-    fread(buffer, 1, fsize, f);
-    buffer[fsize] = '\0';
-    fclose(f);
-    
-    // Encoder en base64 (version simplifiée)
-    char *base64 = calloc(fsize * 2 + 1, 1);
-    if (!base64) {
-        free(buffer);
-        return -1;
-    }
-    
-    for (long i = 0; i < fsize; i += 3) {
-        sprintf(base64 + strlen(base64), "%02x%02x%02x", 
-                buffer[i], 
-                i+1 < fsize ? buffer[i+1] : 0,
-                i+2 < fsize ? buffer[i+2] : 0);
-    }
-    
-    // Upload vers GitHub
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-        free(buffer);
-        free(base64);
-        return -1;
-    }
-    
-    struct curl_response resp = {0};
-    struct curl_slist *headers = NULL;
-    
-    char auth_header[512];
-    snprintf(auth_header, sizeof(auth_header), "Authorization: token %s", token);
-    
-    char api_url[512];
-    snprintf(api_url, sizeof(api_url), 
-             "https://api.github.com/repos/%s/%s/contents/DATA.db",
-             REPO_OWNER, REPO_NAME);
-    
-    char put_data[8192];
-    snprintf(put_data, sizeof(put_data),
-             "{"
-             "\"message\": \"Update package database for %s %s\","
-             "\"content\": \"%s\","
-             "\"branch\": \"main\""
-             "}", name, version, base64);
-    
-    headers = curl_slist_append(headers, auth_header);
-    headers = curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    
-    curl_easy_setopt(curl, CURLOPT_URL, api_url);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, put_data);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
-    
-    CURLcode res = curl_easy_perform(curl);
-    
-    free(buffer);
-    free(base64);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    
-    if (resp.data) free(resp.data);
-    
-    unlink("/tmp/DATA.db");
-    
-    if (res == CURLE_OK) {
-        printf("[APSM] 📊 Database updated for %s %s\n", name, version);
-        return 0;
-    } else {
-        printf("[APSM] ❌ Failed to update database\n");
-        return -1;
-    }
-}
+// ============================================================================
+// PUBLISH COMMAND
+// ============================================================================
 
-// Commande de publication
 int publish_package(const char *filepath) {
-    char token[512];
-    
-    // Charger le token à chaque utilisation
-    if (security_get_token(token, sizeof(token)) != 0) {
-        printf("[APSM] ❌ Not authenticated. Run 'apsm auth <token>'\n");
-        return -1;
-    }
-    
-    printf("[APSM] 🔐 Token loaded securely\n");
-    
-    if (access(filepath, F_OK) != 0) {
-        printf("[APSM] ❌ File not found: %s\n", filepath);
-        memset(token, 0, sizeof(token));
-        return -1;
-    }
-    
     printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    printf("  APSM - GitHub Publisher v2.0\n");
+    printf("  APSM - Zarch Hub Publisher v2.0\n");
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
     
-    char name[256] = "", version[64] = "", release[16] = "", arch[32] = "", suffix[8] = "";
-    parse_package_filename(filepath, name, version, release, arch, suffix);
+    // Vérifier que le fichier existe
+    if (access(filepath, F_OK) != 0) {
+        printf("[APSM] ❌ File not found: %s\n", filepath);
+        return -1;
+    }
+    
+    // Extraire les infos du package
+    char name[256] = "", version[64] = "", release[16] = "r0", arch[32] = "x86_64";
+    parse_package_filename(filepath, name, version, release, arch);
+    
+    if (strlen(name) == 0) {
+        printf("[APSM] ❌ Could not parse package name from filename\n");
+        return -1;
+    }
     
     printf("📦 Package: %s\n", name);
-    printf("🏷️  Version: %s\n", version);
-    printf("🔧 Release: %s\n", release);
+    printf("📌 Version: %s\n", version);
+    printf("🔖 Release: %s\n", release);
     printf("🔧 Arch:    %s\n", arch);
-    printf("🔑 Suffix:  %s\n", suffix);
     
+    // Calculer SHA256
     char sha256[128];
-    if (calculate_sha256(filepath, sha256) != 0) {
-        printf("[APSM] ❌ Failed to calculate SHA256\n");
-        memset(token, 0, sizeof(token));
-        return -1;
+    if (calculate_sha256(filepath, sha256) == 0) {
+        printf("🔏 SHA256:  %.32s...\n", sha256);
     }
-    printf("🔏 SHA256:  %.32s...\n", sha256);
     
+    // Charger la documentation
     char doc_content[MAX_DOC_SIZE] = "";
     load_documentation(doc_content, sizeof(doc_content));
+    printf("📚 Documentation: %zu bytes\n", strlen(doc_content));
     
-    if (strlen(doc_content) > 0) {
-        printf("📚 Documentation loaded (%zu bytes)\n", strlen(doc_content));
-    } else {
-        printf("📚 No documentation found\n");
-    }
+    // Demander les identifiants Zarch
+    printf("\n🔐 Zarch Hub Login\n");
+    printf("Username: ");
+    char username[256];
+    fgets(username, sizeof(username), stdin);
+    username[strcspn(username, "\n")] = 0;
     
-    char tag[64];
-    // Format du tag: v2.0.0-r1
-    if (release[0] == 'r' || (release[0] >= '0' && release[0] <= '9')) {
-        snprintf(tag, sizeof(tag), "v%s-%s", version, release);
-    } else {
-        snprintf(tag, sizeof(tag), "v%s", version);
-    }
+    printf("Password: ");
+    char password[256];
+    fgets(password, sizeof(password), stdin);
+    password[strcspn(password, "\n")] = 0;
     
-    char upload_url[512];
-    int release_id = create_github_release(token, tag, name, version, release,
-                                           arch, sha256, doc_content,
-                                           upload_url, sizeof(upload_url));
-    
-    // Effacer le token de la mémoire après utilisation
-    memset(token, 0, sizeof(token));
-    
-    if (release_id <= 0) {
+    char token[512];
+    if (zarch_login(username, password, token, sizeof(token)) != 0) {
+        printf("[APSM] ❌ Authentication failed\n");
         return -1;
     }
+    printf("[APSM] ✅ Authenticated as %s\n", username);
     
-    // Préparer le nom du fichier avec le bon format
-    char filename[256];
-    if (release[0] == 'r' || (release[0] >= '0' && release[0] <= '9')) {
-        snprintf(filename, sizeof(filename), "%s-v%s-%s.%s.tar.bool", 
-                 name, version, release, arch);
-    } else {
-        snprintf(filename, sizeof(filename), "%s-v%s.%s.tar.bool", 
-                 name, version, arch);
-    }
-    
-    if (upload_asset(token, upload_url, filepath, filename,
-                     "Content-Type: application/octet-stream") != 0) {
+    // Upload du package
+    if (zarch_upload_package(token, filepath, name, version, release, arch) != 0) {
         return -1;
-    }
-    
-    char manifest_path[512];
-    snprintf(manifest_path, sizeof(manifest_path), "build/%s.manifest", name);
-    if (access(manifest_path, F_OK) == 0) {
-        char manifest_name[256];
-        snprintf(manifest_name, sizeof(manifest_name), "%s.manifest", name);
-        upload_asset(token, upload_url, manifest_path, manifest_name,
-                     "Content-Type: text/plain");
-    }
-    
-    char sha_path[512];
-    snprintf(sha_path, sizeof(sha_path), "%s.sha256", filepath);
-    if (access(sha_path, F_OK) == 0) {
-        char sha_name[256];
-        if (release[0] == 'r' || (release[0] >= '0' && release[0] <= '9')) {
-            snprintf(sha_name, sizeof(sha_name), "%s-v%s-%s.%s.tar.bool.sha256",
-                     name, version, release, arch);
-        } else {
-            snprintf(sha_name, sizeof(sha_name), "%s-v%s.%s.tar.bool.sha256",
-                     name, version, arch);
-        }
-        upload_asset(token, upload_url, sha_path, sha_name,
-                     "Content-Type: text/plain");
-    }
-    
-    // Recharger le token pour la mise à jour de la base de données
-    if (security_get_token(token, sizeof(token)) != 0) {
-        printf("[APSM] ⚠️ Cannot update database: token lost\n");
-    } else {
-        update_database(token, name, version, release, arch, sha256, tag);
-        memset(token, 0, sizeof(token));
     }
     
     printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     printf("✅ Publication completed successfully!\n");
-    printf("📦 Release: https://github.com/%s/%s/releases/tag/%s\n", 
-           REPO_OWNER, REPO_NAME, tag);
+    printf("📦 Package: %s %s-%s (%s)\n", name, version, release, arch);
+    printf("🔗 Zarch Hub: %s/package/public/%s/%s\n", 
+           ZARCH_HUB_URL, name, version);
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     
     return 0;
 }
 
-// Commande d'authentification
-int auth_command(const char *raw_token) {
-    security_token_t token_struct;
-    strncpy(token_struct.token, raw_token, sizeof(token_struct.token) - 1);
-    token_struct.last_update = time(NULL);
-    token_struct.validated = 1;
-    
-    if (security_save_token(&token_struct) == 0) {
-        printf("[APSM] 🔐 Token saved securely in %s\n", TOKEN_PATH);
-        
-        // Effacer de la mémoire
-        memset(&token_struct, 0, sizeof(token_struct));
-        return 0;
-    }
-    
-    printf("[APSM] ❌ Failed to save token\n");
-    return -1;
-}
+// ============================================================================
+// AUTH COMMANDS
+// ============================================================================
 
-// Commande de statut
-int status_command(void) {
+int auth_command(const char *username, const char *password) {
     char token[512];
     
-    if (security_get_token(token, sizeof(token)) == 0) {
-        printf("[APSM] ✅ Authenticated\n");
-        printf("[APSM] 📁 Token file: %s\n", TOKEN_PATH);
-        printf("[APSM] 🔐 Token is securely stored\n");
+    if (zarch_login(username, password, token, sizeof(token)) == 0) {
+        // Sauvegarder le token avec BTSCRYPT
+        security_token_t sec_token;
+        strncpy(sec_token.token, token, sizeof(sec_token.token) - 1);
+        sec_token.last_update = time(NULL);
+        sec_token.validated = 1;
         
-        // Vérifier l'âge du fichier
-        struct stat st;
-        if (stat(TOKEN_PATH, &st) == 0) {
-            time_t now = time(NULL);
-            if (now - st.st_mtime < 86400) {
-                printf("[APSM] ✅ Token file is recent (<24h)\n");
-            } else {
-                printf("[APSM] ⚠️ Token file is old (>24h), consider syncing\n");
-            }
+        if (security_save_token(&sec_token) == 0) {
+            printf("[APSM] ✅ Zarch token saved securely\n");
+            return 0;
         }
-        
-        memset(token, 0, sizeof(token));
-        return 0;
-    } else {
-        printf("[APSM] ❌ Not authenticated\n");
-        printf("[APSM] 👉 Run 'apsm auth <token>' to configure\n");
-        return -1;
-    }
-}
-
-// Commande de synchronisation
-int sync_command(void) {
-    printf("[APSM] 🔄 Syncing token from GitHub...\n");
-    
-    if (security_download_token() == 0) {
-        printf("[APSM] ✅ Token synced successfully\n");
-        return status_command();
     }
     
-    printf("[APSM] ❌ Sync failed\n");
+    printf("[APSM] ❌ Authentication failed\n");
     return -1;
 }
 
-// Commande de liste
-int list_command(void) {
-    printf("[APSM] 📋 Published packages:\n");
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+int status_command(void) {
+    security_token_t token;
     
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), 
-             "curl -s %s/DATA.db 2>/dev/null | column -t -s '|'", REPO_RAW);
-    int ret = system(cmd);
-    
-    if (ret != 0) {
-        printf("[APSM] No packages found or database unavailable\n");
+    if (security_load_token(&token) == 0) {
+        printf("[APSM] ✅ Authenticated to Zarch Hub\n");
+        printf("[APSM] 📁 Token: %s\n", TOKEN_PATH);
+        return 0;
     }
     
+    printf("[APSM] ❌ Not authenticated\n");
+    return -1;
+}
+
+int sync_command(void) {
+    printf("[APSM] Sync not needed for Zarch Hub\n");
     return 0;
 }
 
-// Commande d'aide
+// ============================================================================
+// LIST COMMAND (Zarch packages)
+// ============================================================================
+
+int list_command(output_format_t format) {
+    CURL *curl = curl_easy_init();
+    if (!curl) return -1;
+    
+    struct curl_response resp = {0};
+    
+    char url[512];
+    snprintf(url, sizeof(url), "%s/package/search?q=", ZARCH_API_URL);
+    
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    
+    CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    
+    if (res == CURLE_OK && resp.data) {
+        if (format == OUTPUT_JSON) {
+            printf("%s\n", resp.data);
+        } else {
+            struct json_object *parsed = json_tokener_parse(resp.data);
+            if (parsed) {
+                struct json_object *results;
+                if (json_object_object_get_ex(parsed, "results", &results)) {
+                    int len = json_object_array_length(results);
+                    
+                    printf("\n📦 ZARCH HUB PACKAGES\n");
+                    printf("═══════════════════════════════════════════\n");
+                    printf("%-20s %-12s %-15s %-10s\n", "NAME", "VERSION", "AUTHOR", "DOWNLOADS");
+                    printf("───────────────────────────────────────────\n");
+                    
+                    for (int i = 0; i < len; i++) {
+                        struct json_object *pkg = json_object_array_get_idx(results, i);
+                        struct json_object *name, *ver, *author, *downloads;
+                        
+                        const char *n = "?", *v = "?", *a = "?";
+                        int d = 0;
+                        
+                        if (json_object_object_get_ex(pkg, "name", &name))
+                            n = json_object_get_string(name);
+                        if (json_object_object_get_ex(pkg, "version", &ver))
+                            v = json_object_get_string(ver);
+                        if (json_object_object_get_ex(pkg, "author", &author))
+                            a = json_object_get_string(author);
+                        if (json_object_object_get_ex(pkg, "downloads", &downloads))
+                            d = json_object_get_int(downloads);
+                        
+                        printf(" • %-20s %-12s %-15s %-10d\n", n, v, a, d);
+                    }
+                    
+                    printf("═══════════════════════════════════════════\n");
+                    printf(" Total: %d packages\n", len);
+                }
+                json_object_put(parsed);
+            }
+        }
+        free(resp.data);
+        return 0;
+    }
+    
+    printf("[APSM] ❌ Failed to fetch package list\n");
+    return -1;
+}
+
+// ============================================================================
+// HELP
+// ============================================================================
+
 void print_help(void) {
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    printf("  APSM - GitHub Publisher for APKM v2.0\n");
+    printf("  APSM - Zarch Hub Publisher v2.0\n");
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
     printf("USAGE:\n");
     printf("  apsm <COMMAND> [OPTIONS]\n\n");
     printf("COMMANDS:\n");
-    printf("  auth <token>              Save GitHub token (encrypted with BTSCRYPT)\n");
-    printf("  push <file>                Publish package to GitHub Releases\n");
-    printf("  status                     Check authentication status\n");
-    printf("  sync                       Sync token from GitHub\n");
-    printf("  list                       List published packages\n");
-    printf("  help                       Show this help\n\n");
-    printf("EXAMPLES:\n");
-    printf("  apsm auth ghp_xxxxxxxxxxxx\n");
+    printf("  push <file>              Publish package to Zarch Hub\n");
+    printf("  login <user> [pass]      Authenticate to Zarch Hub\n");
+    printf("  status                   Check authentication status\n");
+    printf("  list                     List packages on Zarch Hub\n");
+    printf("\nOPTIONS:\n");
+    printf("  -j, --json               JSON output\n");
+    printf("\nEXAMPLES:\n");
+    printf("  apsm login mauricio\n");
     printf("  apsm push build/apkm-v2.0.0-r1.x86_64.tar.bool\n");
-    printf("  apsm status\n");
-    printf("  apsm list\n\n");
-    printf("DOCUMENTATION:\n");
-    printf("  Use $APKMDOC::[%%OPEN+==README.md] in APKMBUILD to include docs\n");
+    printf("  apsm list\n");
+    printf("  apsm list --json\n");
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 }
+
+// ============================================================================
+// MAIN
+// ============================================================================
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -837,28 +565,46 @@ int main(int argc, char *argv[]) {
     
     security_init();
     
-    if (strcmp(argv[1], "auth") == 0) {
-        if (argc < 3) {
-            printf("[APSM] ❌ Missing token\n");
-            return 1;
+    output_format_t format = OUTPUT_TEXT;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--json") == 0 || strcmp(argv[i], "-j") == 0) {
+            format = OUTPUT_JSON;
         }
-        return auth_command(argv[2]);
     }
-    else if (strcmp(argv[1], "push") == 0) {
+    
+    if (strcmp(argv[1], "push") == 0) {
         if (argc < 3) {
             printf("[APSM] ❌ Missing file\n");
             return 1;
         }
         return publish_package(argv[2]);
     }
+    else if (strcmp(argv[1], "login") == 0) {
+        if (argc < 3) {
+            printf("[APSM] ❌ Missing username\n");
+            return 1;
+        }
+        
+        char *username = argv[2];
+        char *password = NULL;
+        
+        if (argc >= 4) {
+            password = argv[3];
+        } else {
+            printf("Password: ");
+            char pass[256];
+            fgets(pass, sizeof(pass), stdin);
+            pass[strcspn(pass, "\n")] = 0;
+            password = pass;
+        }
+        
+        return auth_command(username, password);
+    }
     else if (strcmp(argv[1], "status") == 0) {
         return status_command();
     }
-    else if (strcmp(argv[1], "sync") == 0) {
-        return sync_command();
-    }
     else if (strcmp(argv[1], "list") == 0) {
-        return list_command();
+        return list_command(format);
     }
     else if (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "--help") == 0) {
         print_help();
