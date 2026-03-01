@@ -1,3 +1,11 @@
+/* 
+package from gopu inc. as tittle indicative open source
+
+it lisense is MIT (c) 2026 gopu .inc. 
+new production by gopu inc.
+team created new release
+*/
+
 #ifndef APKM_H
 #define APKM_H
 
@@ -22,6 +30,9 @@
 #define REPO_RAW "https://raw.githubusercontent.com/gopu-inc/apkm-gest/main"
 #define REPO_API "https://api.github.com/repos/gopu-inc/apkm-gest"
 #define REPO_RELEASES "https://api.github.com/repos/gopu-inc/apkm-gest/releases"
+#define ZARCH_HUB_URL "https://zenv-hub.onrender.com"
+#define ZARCH_API_URL ZARCH_HUB_URL "/api"
+#define ZARCH_PACKAGE_URL ZARCH_HUB_URL "/package/download"
 // Formats de sortie
 typedef enum {
     OUTPUT_TEXT,
