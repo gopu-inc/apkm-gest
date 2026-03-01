@@ -49,6 +49,14 @@ typedef enum {
     SECURITY_PARANOID
 } security_level_t;
 
+// Structure du token de sécurité
+typedef struct {
+    char token[512];
+    char sha256[128];
+    time_t last_update;
+    int validated;
+} security_token_t;
+
 // Structure d'un paquet
 typedef struct {
     char name[128];
@@ -93,7 +101,7 @@ int apkm_install_local(const char* filepath);
 int apkm_list(void);
 int apkm_search(const char* query, output_format_t format);
 int apkm_repos(output_format_t format);
-int apkm_update(void);
+int apkm_update(output_format_t format);
 
 // Zarch functions
 int zarch_download(const char* name, const char* version, const char* arch, const char* output_path);
