@@ -32,17 +32,20 @@ typedef struct {
     char release[16];
     char arch[32];
     char sha256[128];
-    char url[512];
+    char url[1024];
     time_t timestamp;
     char publisher[256];
 } package_metadata_t;
 
 // Prototypes
 int security_init(void);
-int security_load_token(security_token_t *token);
+int security_load_token(security_token_t *token);  // Charge et déchiffre
+int security_get_token(char *token_buffer, size_t buffer_size);  // Nouveau: charge à chaque appel
 int security_save_token(const security_token_t *token);
 int security_download_token(void);
+int security_clear_token(void);  // Nouveau: efface de la mémoire
 int calculate_sha256(const char *filepath, char *output);
 void btscrypt_process(char *data, int encrypt);
+char* escape_json(const char *str, char *output, size_t output_size);
 
 #endif
