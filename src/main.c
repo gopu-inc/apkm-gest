@@ -559,7 +559,7 @@ int cmd_repos(output_format_t format) {
     return zarch_list_repos(format);
 }
 
-int cmd_update(void) {
+int cmd_update(output_format_t format) {
     char db_content[65536];
     if (github_fetch_database(db_content, sizeof(db_content)) == 0) {
         printf("[APKM] Repository database updated\n");

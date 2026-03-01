@@ -13,7 +13,7 @@
 #define KEYRING_PATH SECURITY_PATH "/keys"
 #define SIGNATURE_PATH SECURITY_PATH "/signatures"
 #define CONFIG_FILE SECURITY_PATH "/APKM.apkm"
-#define REPO_OWNER "gopu-inc"
+#define REPO_OWNER "Mauricio-100"
 #define REPO_NAME "apkm-gest"
 #define REPO_API "https://api.github.com/repos/gopu-inc/apkm-gest"
 #define REPO_RAW "https://raw.githubusercontent.com/gopu-inc/apkm-gest/main"
