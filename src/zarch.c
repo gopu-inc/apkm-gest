@@ -1,26 +1,16 @@
 #include "apkm.h"
 #include <curl/curl.h>
 #include <json-c/json.h>
+#include <string.h>
+#include <unistd.h>
 
 typedef struct {
-    char name[256];
-    char version[64];
-    char scope[64];
-    char author[256];
-    char sha256[128];
-    long size;
-    int downloads;
-    char updated_at[32];
-} zarch_package_t;
-
-// Structure pour la réponse curl
-struct zarch_response {
     char *data;
     size_t size;
-};
+} zarch_response_t;
 
 static size_t zarch_write_callback(void *ptr, size_t size, size_t nmemb, void *userdata) {
-    struct zarch_response *resp = (struct zarch_response *)userdata;
+    zarch_response_t *resp = (zarch_response_t *)userdata;
     size_t total = size * nmemb;
     
     resp->data = realloc(resp->data, resp->size + total + 1);
@@ -33,12 +23,11 @@ static size_t zarch_write_callback(void *ptr, size_t size, size_t nmemb, void *u
     return total;
 }
 
-// Authentification sur Zarch Hub
 int zarch_login(const char *username, const char *password, char *token, size_t token_size) {
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
     
-    struct zarch_response resp = {0};
+    zarch_response_t resp = {0};
     struct curl_slist *headers = NULL;
     
     char url[512];
@@ -60,6 +49,7 @@ int zarch_login(const char *username, const char *password, char *token, size_t 
     
     CURLcode res = curl_easy_perform(curl);
     
+    int success = -1;
     if (res == CURLE_OK && resp.data) {
         struct json_object *parsed = json_tokener_parse(resp.data);
         if (parsed) {
@@ -68,11 +58,7 @@ int zarch_login(const char *username, const char *password, char *token, size_t 
                 const char *token_str = json_object_get_string(token_obj);
                 strncpy(token, token_str, token_size - 1);
                 token[token_size - 1] = '\0';
-                json_object_put(parsed);
-                curl_slist_free_all(headers);
-                curl_easy_cleanup(curl);
-                free(resp.data);
-                return 0;
+                success = 0;
             }
             json_object_put(parsed);
         }
@@ -80,16 +66,16 @@ int zarch_login(const char *username, const char *password, char *token, size_t 
     
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
-    free(resp.data);
-    return -1;
+    if (resp.data) free(resp.data);
+    
+    return success;
 }
 
-// Rechercher des packages sur Zarch Hub
 int zarch_search(const char *query, zarch_package_t *results, int max_results) {
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
     
-    struct zarch_response resp = {0};
+    zarch_response_t resp = {0};
     
     char url[512];
     snprintf(url, sizeof(url), "%s/package/search?q=%s", ZARCH_API_URL, query);
@@ -111,25 +97,18 @@ int zarch_search(const char *query, zarch_package_t *results, int max_results) {
                 for (int i = 0; i < len && i < max_results; i++) {
                     struct json_object *pkg = json_object_array_get_idx(results_obj, i);
                     
-                    struct json_object *name_obj, *version_obj, *scope_obj, *author_obj;
-                    struct json_object *sha256_obj, *size_obj, *downloads_obj, *updated_obj;
+                    struct json_object *name_obj, *version_obj, *author_obj, *downloads_obj;
+                    
+                    memset(&results[count], 0, sizeof(zarch_package_t));
                     
                     if (json_object_object_get_ex(pkg, "name", &name_obj))
                         strcpy(results[count].name, json_object_get_string(name_obj));
                     if (json_object_object_get_ex(pkg, "version", &version_obj))
                         strcpy(results[count].version, json_object_get_string(version_obj));
-                    if (json_object_object_get_ex(pkg, "scope", &scope_obj))
-                        strcpy(results[count].scope, json_object_get_string(scope_obj));
                     if (json_object_object_get_ex(pkg, "author", &author_obj))
                         strcpy(results[count].author, json_object_get_string(author_obj));
-                    if (json_object_object_get_ex(pkg, "sha256", &sha256_obj))
-                        strcpy(results[count].sha256, json_object_get_string(sha256_obj));
-                    if (json_object_object_get_ex(pkg, "size", &size_obj))
-                        results[count].size = json_object_get_int(size_obj);
                     if (json_object_object_get_ex(pkg, "downloads", &downloads_obj))
                         results[count].downloads = json_object_get_int(downloads_obj);
-                    if (json_object_object_get_ex(pkg, "updated_at", &updated_obj))
-                        strcpy(results[count].updated_at, json_object_get_string(updated_obj));
                     
                     count++;
                 }
@@ -139,21 +118,22 @@ int zarch_search(const char *query, zarch_package_t *results, int max_results) {
     }
     
     curl_easy_cleanup(curl);
-    free(resp.data);
+    if (resp.data) free(resp.data);
+    
     return count;
 }
 
-// Télécharger depuis Zarch Hub
-int zarch_download(const char *scope, const char *name, const char *version, 
-                   const char *output_path) {
+int zarch_download(const char *name, const char *version, const char *arch, const char *output_path) {
+    (void)arch; // Unused for now
+    
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
     
     char url[512];
-    snprintf(url, sizeof(url), "%s/%s/%s/%s", 
-             ZARCH_PACKAGE_URL, scope, name, version);
+    snprintf(url, sizeof(url), "%s/package/download/public/%s/%s", 
+             ZARCH_HUB_URL, name, version);
     
-    printf("[ZARCH] Downloading %s/%s %s...\n", scope, name, version);
+    printf("[ZARCH] Downloading %s %s...\n", name, version);
     
     FILE *fp = fopen(output_path, "wb");
     if (!fp) {
@@ -192,4 +172,68 @@ int zarch_download(const char *scope, const char *name, const char *version,
     curl_easy_cleanup(curl);
     
     return 0;
+}
+
+int zarch_list_repos(output_format_t format) {
+    CURL *curl = curl_easy_init();
+    if (!curl) return -1;
+    
+    zarch_response_t resp = {0};
+    
+    char url[512];
+    snprintf(url, sizeof(url), "%s/package/search?q=", ZARCH_API_URL);
+    
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, zarch_write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+    
+    CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    
+    if (res == CURLE_OK && resp.data) {
+        if (format == OUTPUT_JSON) {
+            printf("%s\n", resp.data);
+        } else {
+            struct json_object *parsed = json_tokener_parse(resp.data);
+            if (parsed) {
+                struct json_object *results_obj;
+                if (json_object_object_get_ex(parsed, "results", &results_obj)) {
+                    int len = json_object_array_length(results_obj);
+                    
+                    printf("\n📦 ZARCH HUB PACKAGES\n");
+                    printf("═══════════════════════════════════════════\n");
+                    printf("%-20s %-12s %-15s %-10s\n", "NAME", "VERSION", "AUTHOR", "DOWNLOADS");
+                    printf("───────────────────────────────────────────\n");
+                    
+                    for (int i = 0; i < len; i++) {
+                        struct json_object *pkg = json_object_array_get_idx(results_obj, i);
+                        struct json_object *name, *version, *author, *downloads;
+                        
+                        const char *n = "?", *v = "?", *a = "?";
+                        int d = 0;
+                        
+                        if (json_object_object_get_ex(pkg, "name", &name))
+                            n = json_object_get_string(name);
+                        if (json_object_object_get_ex(pkg, "version", &version))
+                            v = json_object_get_string(version);
+                        if (json_object_object_get_ex(pkg, "author", &author))
+                            a = json_object_get_string(author);
+                        if (json_object_object_get_ex(pkg, "downloads", &downloads))
+                            d = json_object_get_int(downloads);
+                        
+                        printf(" • %-20s %-12s %-15s %-10d\n", n, v, a, d);
+                    }
+                    
+                    printf("═══════════════════════════════════════════\n");
+                    printf(" Total: %d packages\n", len);
+                }
+                json_object_put(parsed);
+            }
+        }
+        free(resp.data);
+        return 0;
+    }
+    
+    if (resp.data) free(resp.data);
+    return -1;
 }
