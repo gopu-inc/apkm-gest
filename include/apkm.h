@@ -1,9 +1,9 @@
 /* 
 package from gopu inc. as tittle indicative open source
 
-it lisense is MIT (c) 2026 gopu .inc. 
+ this is lisense is MIT (c) 2026 gopu .inc. 
 new production by gopu inc.
-team created new release
+team created new release logiciel 
 */
 
 #ifndef APKM_H
