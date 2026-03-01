@@ -62,25 +62,6 @@ void clean_string(char *str) {
     }
 }
 
-// Échapper une chaîne pour JSON
-char* escape_json(const char *str, char *output, size_t output_size) {
-    size_t j = 0;
-    for (size_t i = 0; str[i] && j < output_size - 1; i++) {
-        switch (str[i]) {
-            case '"':  output[j++] = '\\'; output[j++] = '"'; break;
-            case '\\': output[j++] = '\\'; output[j++] = '\\'; break;
-            case '\b': output[j++] = '\\'; output[j++] = 'b'; break;
-            case '\f': output[j++] = '\\'; output[j++] = 'f'; break;
-            case '\n': output[j++] = '\\'; output[j++] = 'n'; break;
-            case '\r': output[j++] = '\\'; output[j++] = 'r'; break;
-            case '\t': output[j++] = '\\'; output[j++] = 't'; break;
-            default:   output[j++] = str[i]; break;
-        }
-    }
-    output[j] = '\0';
-    return output;
-}
-
 // Charger la documentation depuis APKMBUILD ou README
 char* load_documentation(char *buffer, size_t buffer_size) {
     buffer[0] = '\0';
@@ -195,7 +176,8 @@ char* load_documentation(char *buffer, size_t buffer_size) {
     
     return buffer;
 }
-// gere le parser de fichier tres important 
+
+// Extraire les infos du package depuis le nom de fichier
 void parse_package_filename(const char *filename, char *name, char *version, 
                             char *release, char *arch, char *suffix) {
     char temp[512];
@@ -223,7 +205,6 @@ void parse_package_filename(const char *filename, char *name, char *version,
         strncpy(version, version_start + 2, ver_len);
         version[ver_len] = '\0';
         
-        // Préserver le 'r' dans le suffixe
         suffix[0] = 'r';
         suffix[1] = '\0';
         
@@ -241,16 +222,32 @@ void parse_package_filename(const char *filename, char *name, char *version,
         char *arch_start = strchr(version_start + 2, '.');
         if (arch_start) {
             int ver_len = arch_start - (version_start + 2);
-            strncpy(version, version_start + 2, ver_len);
-            version[ver_len] = '\0';
-            strcpy(release, "0");
-            strcpy(suffix, "");
+            
+            // Vérifier si la version contient déjà un tiret (comme 2.0.0-1)
+            char *dash_in_version = strstr(version_start + 2, "-");
+            if (dash_in_version && dash_in_version < arch_start) {
+                int dash_pos = dash_in_version - (version_start + 2);
+                strncpy(version, version_start + 2, dash_pos);
+                version[dash_pos] = '\0';
+                
+                strcpy(suffix, "");
+                int rel_len = arch_start - (dash_in_version + 1);
+                strncpy(release, dash_in_version + 1, rel_len);
+                release[rel_len] = '\0';
+            } else {
+                strncpy(version, version_start + 2, ver_len);
+                version[ver_len] = '\0';
+                strcpy(release, "0");
+                strcpy(suffix, "");
+            }
+            
             strncpy(arch, arch_start + 1, 31);
             arch[31] = '\0';
         }
     }
 }
-// Créer une release sur GitHub (VERSION UNIQUE)
+
+// Créer une release sur GitHub
 int create_github_release(const char *token, const char *tag, const char *name,
                           const char *version, const char *release,
                           const char *arch, const char *sha256,
@@ -266,7 +263,8 @@ int create_github_release(const char *token, const char *tag, const char *name,
     snprintf(auth_header, sizeof(auth_header), "Authorization: token %s", token);
     
     char url[512];
-    snprintf(url, sizeof(url), "https://api.github.com/repos/gopu-inc/apkm-gest/releases");
+    snprintf(url, sizeof(url), "https://api.github.com/repos/%s/%s/releases",
+             REPO_OWNER, REPO_NAME);
     
     // Échapper la documentation pour JSON
     char doc_escaped[MAX_DOC_SIZE * 2] = "";
@@ -365,7 +363,8 @@ int create_github_release(const char *token, const char *tag, const char *name,
     }
     
     printf("[APSM] ✅ Release created (ID: %d)\n", release_id);
-    printf("[APSM] 🔗 https://github.com/gopu-inc/apkm-gest/releases/tag/%s\n", tag);
+    printf("[APSM] 🔗 https://github.com/%s/%s/releases/tag/%s\n", 
+           REPO_OWNER, REPO_NAME, tag);
     
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
@@ -446,38 +445,168 @@ int update_database(const char *token, const char *name, const char *version,
                     const char *tag) {
     
     char package_url[1024];
-    snprintf(package_url, sizeof(package_url),
-             "https://github.com/gopu-inc/apkm-gest/releases/download/%s/%s-v%s-%s.%s.tar.bool",
-             tag, name, version, release, arch);
     
+    // Construire l'URL avec le bon format (garder le r)
+    if (release[0] == 'r' || (release[0] >= '0' && release[0] <= '9')) {
+        snprintf(package_url, sizeof(package_url),
+                 "https://github.com/%s/%s/releases/download/%s/%s-v%s-%s.%s.tar.bool",
+                 REPO_OWNER, REPO_NAME, tag, name, version, release, arch);
+    } else {
+        snprintf(package_url, sizeof(package_url),
+                 "https://github.com/%s/%s/releases/download/%s/%s-v%s.%s.tar.bool",
+                 REPO_OWNER, REPO_NAME, tag, name, version, arch);
+    }
+    
+    // Télécharger DATA.db actuel
     char cmd[2048];
     snprintf(cmd, sizeof(cmd),
-             "curl -s https://raw.githubusercontent.com/gopu-inc/apkm-gest/main/DATA.db > /tmp/DATA.db 2>/dev/null");
+             "curl -s %s/DATA.db > /tmp/DATA.db 2>/dev/null", REPO_RAW);
     system(cmd);
     
-    FILE *db = fopen("/tmp/DATA.db", "a");
-    if (!db) return -1;
+    // Lire le fichier existant pour vérifier les doublons
+    FILE *old_db = fopen("/tmp/DATA.db", "r");
+    FILE *new_db = fopen("/tmp/DATA.new", "w");
     
-    fprintf(db, "%s|%s|%s|%s|%lld|%s|%s\n", 
+    if (!new_db) {
+        if (old_db) fclose(old_db);
+        return -1;
+    }
+    
+    // Copier les anciennes entrées (sauf si c'est un doublon)
+    if (old_db) {
+        char line[1024];
+        int found = 0;
+        
+        while (fgets(line, sizeof(line), old_db)) {
+            char n[256], v[64];
+            if (sscanf(line, "%[^|]|%[^|]", n, v) == 2) {
+                if (strcmp(n, name) == 0 && strcmp(v, version) == 0) {
+                    found = 1;
+                    continue;  // Ne pas copier l'ancienne version
+                }
+            }
+            fputs(line, new_db);
+        }
+        fclose(old_db);
+        
+        if (found) {
+            printf("[APSM] 📝 Updating existing entry for %s %s\n", name, version);
+        }
+    }
+    
+    // Ajouter la nouvelle entrée
+    fprintf(new_db, "%s|%s|%s|%s|%lld|%s|%s\n", 
             name, version, release, arch, (long long)time(NULL), sha256, package_url);
-    fclose(db);
+    fclose(new_db);
     
-    printf("[APSM] 📊 Database updated for %s %s\n", name, version);
+    // Remplacer l'ancien fichier
+    rename("/tmp/DATA.new", "/tmp/DATA.db");
     
-    return 0;
+    // Lire le fichier et l'encoder en base64
+    FILE *f = fopen("/tmp/DATA.db", "rb");
+    if (!f) return -1;
+    
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    unsigned char *buffer = malloc(fsize + 1);
+    if (!buffer) {
+        fclose(f);
+        return -1;
+    }
+    
+    fread(buffer, 1, fsize, f);
+    buffer[fsize] = '\0';
+    fclose(f);
+    
+    // Encoder en base64 (version simplifiée)
+    char *base64 = calloc(fsize * 2 + 1, 1);
+    if (!base64) {
+        free(buffer);
+        return -1;
+    }
+    
+    for (long i = 0; i < fsize; i += 3) {
+        sprintf(base64 + strlen(base64), "%02x%02x%02x", 
+                buffer[i], 
+                i+1 < fsize ? buffer[i+1] : 0,
+                i+2 < fsize ? buffer[i+2] : 0);
+    }
+    
+    // Upload vers GitHub
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        free(buffer);
+        free(base64);
+        return -1;
+    }
+    
+    struct curl_response resp = {0};
+    struct curl_slist *headers = NULL;
+    
+    char auth_header[512];
+    snprintf(auth_header, sizeof(auth_header), "Authorization: token %s", token);
+    
+    char api_url[512];
+    snprintf(api_url, sizeof(api_url), 
+             "https://api.github.com/repos/%s/%s/contents/DATA.db",
+             REPO_OWNER, REPO_NAME);
+    
+    char put_data[8192];
+    snprintf(put_data, sizeof(put_data),
+             "{"
+             "\"message\": \"Update package database for %s %s\","
+             "\"content\": \"%s\","
+             "\"branch\": \"main\""
+             "}", name, version, base64);
+    
+    headers = curl_slist_append(headers, auth_header);
+    headers = curl_slist_append(headers, "Accept: application/vnd.github.v3+json");
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    
+    curl_easy_setopt(curl, CURLOPT_URL, api_url);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, put_data);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+    
+    CURLcode res = curl_easy_perform(curl);
+    
+    free(buffer);
+    free(base64);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    
+    if (resp.data) free(resp.data);
+    
+    unlink("/tmp/DATA.db");
+    
+    if (res == CURLE_OK) {
+        printf("[APSM] 📊 Database updated for %s %s\n", name, version);
+        return 0;
+    } else {
+        printf("[APSM] ❌ Failed to update database\n");
+        return -1;
+    }
 }
 
 // Commande de publication
 int publish_package(const char *filepath) {
-    security_token_t token;
+    char token[512];
     
-    if (security_load_token(&token) != 0) {
+    // Charger le token à chaque utilisation
+    if (security_get_token(token, sizeof(token)) != 0) {
         printf("[APSM] ❌ Not authenticated. Run 'apsm auth <token>'\n");
         return -1;
     }
     
+    printf("[APSM] 🔐 Token loaded securely\n");
+    
     if (access(filepath, F_OK) != 0) {
         printf("[APSM] ❌ File not found: %s\n", filepath);
+        memset(token, 0, sizeof(token));
         return -1;
     }
     
@@ -489,13 +618,15 @@ int publish_package(const char *filepath) {
     parse_package_filename(filepath, name, version, release, arch, suffix);
     
     printf("📦 Package: %s\n", name);
-    printf("🏷️  Version: %s-%s\n", version, release);
+    printf("🏷️  Version: %s\n", version);
+    printf("🔧 Release: %s\n", release);
     printf("🔧 Arch:    %s\n", arch);
     printf("🔑 Suffix:  %s\n", suffix);
     
     char sha256[128];
     if (calculate_sha256(filepath, sha256) != 0) {
         printf("[APSM] ❌ Failed to calculate SHA256\n");
+        memset(token, 0, sizeof(token));
         return -1;
     }
     printf("🔏 SHA256:  %.32s...\n", sha256);
@@ -510,26 +641,36 @@ int publish_package(const char *filepath) {
     }
     
     char tag[64];
-    snprintf(tag, sizeof(tag), "v%s-%s", version, release);
+    // Format du tag: v2.0.0-r1
+    if (release[0] == 'r' || (release[0] >= '0' && release[0] <= '9')) {
+        snprintf(tag, sizeof(tag), "v%s-%s", version, release);
+    } else {
+        snprintf(tag, sizeof(tag), "v%s", version);
+    }
     
     char upload_url[512];
-    int release_id = create_github_release(token.token, tag, name, version, release,
+    int release_id = create_github_release(token, tag, name, version, release,
                                            arch, sha256, doc_content,
                                            upload_url, sizeof(upload_url));
+    
+    // Effacer le token de la mémoire après utilisation
+    memset(token, 0, sizeof(token));
+    
     if (release_id <= 0) {
         return -1;
     }
     
-char filename[256];
-if (suffix[0] == 'r') {
-    snprintf(filename, sizeof(filename), "%s-v%s-r%s.%s.tar.bool", 
-             name, version, release, arch);
-} else {
-    snprintf(filename, sizeof(filename), "%s-v%s-%s.%s.tar.bool", 
-             name, version, release, arch);
-}
+    // Préparer le nom du fichier avec le bon format
+    char filename[256];
+    if (release[0] == 'r' || (release[0] >= '0' && release[0] <= '9')) {
+        snprintf(filename, sizeof(filename), "%s-v%s-%s.%s.tar.bool", 
+                 name, version, release, arch);
+    } else {
+        snprintf(filename, sizeof(filename), "%s-v%s.%s.tar.bool", 
+                 name, version, arch);
+    }
     
-    if (upload_asset(token.token, upload_url, filepath, filename,
+    if (upload_asset(token, upload_url, filepath, filename,
                      "Content-Type: application/octet-stream") != 0) {
         return -1;
     }
@@ -539,7 +680,7 @@ if (suffix[0] == 'r') {
     if (access(manifest_path, F_OK) == 0) {
         char manifest_name[256];
         snprintf(manifest_name, sizeof(manifest_name), "%s.manifest", name);
-        upload_asset(token.token, upload_url, manifest_path, manifest_name,
+        upload_asset(token, upload_url, manifest_path, manifest_name,
                      "Content-Type: text/plain");
     }
     
@@ -547,17 +688,29 @@ if (suffix[0] == 'r') {
     snprintf(sha_path, sizeof(sha_path), "%s.sha256", filepath);
     if (access(sha_path, F_OK) == 0) {
         char sha_name[256];
-        snprintf(sha_name, sizeof(sha_name), "%s-v%s-%s.%s.tar.bool.sha256",
-                 name, version, release, arch);
-        upload_asset(token.token, upload_url, sha_path, sha_name,
+        if (release[0] == 'r' || (release[0] >= '0' && release[0] <= '9')) {
+            snprintf(sha_name, sizeof(sha_name), "%s-v%s-%s.%s.tar.bool.sha256",
+                     name, version, release, arch);
+        } else {
+            snprintf(sha_name, sizeof(sha_name), "%s-v%s.%s.tar.bool.sha256",
+                     name, version, arch);
+        }
+        upload_asset(token, upload_url, sha_path, sha_name,
                      "Content-Type: text/plain");
     }
     
-    update_database(token.token, name, version, release, arch, sha256, tag);
+    // Recharger le token pour la mise à jour de la base de données
+    if (security_get_token(token, sizeof(token)) != 0) {
+        printf("[APSM] ⚠️ Cannot update database: token lost\n");
+    } else {
+        update_database(token, name, version, release, arch, sha256, tag);
+        memset(token, 0, sizeof(token));
+    }
     
     printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     printf("✅ Publication completed successfully!\n");
-    printf("📦 Release: https://github.com/gopu-inc/apkm-gest/releases/tag/%s\n", tag);
+    printf("📦 Release: https://github.com/%s/%s/releases/tag/%s\n", 
+           REPO_OWNER, REPO_NAME, tag);
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     
     return 0;
@@ -565,13 +718,16 @@ if (suffix[0] == 'r') {
 
 // Commande d'authentification
 int auth_command(const char *raw_token) {
-    security_token_t token;
-    strncpy(token.token, raw_token, sizeof(token.token) - 1);
-    token.last_update = time(NULL);
-    token.validated = 1;
+    security_token_t token_struct;
+    strncpy(token_struct.token, raw_token, sizeof(token_struct.token) - 1);
+    token_struct.last_update = time(NULL);
+    token_struct.validated = 1;
     
-    if (security_save_token(&token) == 0) {
+    if (security_save_token(&token_struct) == 0) {
         printf("[APSM] 🔐 Token saved securely in %s\n", TOKEN_PATH);
+        
+        // Effacer de la mémoire
+        memset(&token_struct, 0, sizeof(token_struct));
         return 0;
     }
     
@@ -581,18 +737,25 @@ int auth_command(const char *raw_token) {
 
 // Commande de statut
 int status_command(void) {
-    security_token_t token;
+    char token[512];
     
-    if (security_load_token(&token) == 0) {
-        printf("[APSM] ✅ Authenticated (token: %.10s...)\n", token.token);
-        printf("[APSM] 📁 Token: %s\n", TOKEN_PATH);
+    if (security_get_token(token, sizeof(token)) == 0) {
+        printf("[APSM] ✅ Authenticated\n");
+        printf("[APSM] 📁 Token file: %s\n", TOKEN_PATH);
+        printf("[APSM] 🔐 Token is securely stored\n");
         
-        time_t now = time(NULL);
-        if (now - token.last_update < 86400) {
-            printf("[APSM] ✅ Token is recent (<24h)\n");
-        } else {
-            printf("[APSM] ⚠️ Token is old (>24h), consider syncing\n");
+        // Vérifier l'âge du fichier
+        struct stat st;
+        if (stat(TOKEN_PATH, &st) == 0) {
+            time_t now = time(NULL);
+            if (now - st.st_mtime < 86400) {
+                printf("[APSM] ✅ Token file is recent (<24h)\n");
+            } else {
+                printf("[APSM] ⚠️ Token file is old (>24h), consider syncing\n");
+            }
         }
+        
+        memset(token, 0, sizeof(token));
         return 0;
     } else {
         printf("[APSM] ❌ Not authenticated\n");
@@ -621,7 +784,7 @@ int list_command(void) {
     
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), 
-             "curl -s https://raw.githubusercontent.com/gopu-inc/apkm-gest/main/DATA.db 2>/dev/null | column -t -s '|'");
+             "curl -s %s/DATA.db 2>/dev/null | column -t -s '|'", REPO_RAW);
     int ret = system(cmd);
     
     if (ret != 0) {
@@ -647,7 +810,7 @@ void print_help(void) {
     printf("  help                       Show this help\n\n");
     printf("EXAMPLES:\n");
     printf("  apsm auth ghp_xxxxxxxxxxxx\n");
-    printf("  apsm push build/super-app-v1.0.0-r1.x86_64.tar.bool\n");
+    printf("  apsm push build/apkm-v2.0.0-r1.x86_64.tar.bool\n");
     printf("  apsm status\n");
     printf("  apsm list\n\n");
     printf("DOCUMENTATION:\n");
