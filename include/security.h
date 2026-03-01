@@ -2,6 +2,8 @@
 #define SECURITY_H
 
 #include "apkm.h"
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define SECURITY_PATH "/usr/local/share/apkm/PROTOCOLE/security"
 #define TOKEN_PATH SECURITY_PATH "/tokens/.config.cfg"
