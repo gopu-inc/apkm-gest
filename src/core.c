@@ -1,14 +1,4 @@
 #include "apkm.h"
-#include <signal.h>     // Pour sigemptyset, sigaddset, sigprocmask, SIG_BLOCK
-#include <time.h>       // Pour CLOCK_MONOTONIC
-#include <sys/timerfd.h> // Pour timerfd_create
-#include <sys/signalfd.h> // Pour signalfd
-#include <sys/epoll.h>   // Pour epoll_create1
-#include <sys/eventfd.h> // Pour eventfd
-#include <sys/inotify.h> // Pour inotify_init1
-#include <sys/prctl.h>   // Pour prctl
-#include <sys/xattr.h>   // Pour xattr
-#include <cap-ng.h>      // Pour les capacités
 #include <pthread.h>
 #include <semaphore.h>
 #include <sys/epoll.h>
@@ -18,8 +8,9 @@
 #include <sys/inotify.h>
 #include <sys/prctl.h>
 #include <sys/xattr.h>
-#include <signal.h>  // Ajouté pour SIGINT, SIGTERM
-#include <cap-ng.h>  // Pour les capacités
+#include <signal.h>
+#include <time.h>
+#include <cap-ng.h>
 #include <lz4.h>
 #include <zstd.h>
 #include <yaml.h>
@@ -28,6 +19,7 @@
 #include <curl/curl.h>
 #include <archive.h>
 #include <archive_entry.h>
+
 
 // Définitions des structures manquantes
 typedef struct {
