@@ -10,25 +10,16 @@
 #include "apkm.h"
 #include "security.h"
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
-#define ZARCH_HUB_URL "https://gsql-badge.onrender.com"
-#define ZARCH_API_URL ZARCH_HUB_URL "/api"
-#define ZARCH_PACKAGE_URL ZARCH_HUB_URL "/package/download"
 #define MAX_DOC_SIZE 16384
 #define UPLOAD_CHUNK_SIZE 8192
 
-// ============================================================================
-// STRUCTURES
-// ============================================================================
-
+// Structure pour la réponse curl
 struct curl_response {
     char *data;
     size_t size;
 };
 
+// Structure pour la progression d'upload
 typedef struct {
     double last_progress;
     char filename[256];
@@ -39,17 +30,8 @@ typedef struct {
     long total_size;
 } upload_context_t;
 
-typedef struct {
-    char name[256];
-    char version[64];
-    char release[16];
-    char arch[32];
-    char sha256[128];
-    long size;
-} package_meta_t;
-
 // ============================================================================
-// CALLBACKS CURL
+// Callbacks curl
 // ============================================================================
 
 static size_t write_callback(void *ptr, size_t size, size_t nmemb, void *userdata) {
@@ -66,6 +48,7 @@ static size_t write_callback(void *ptr, size_t size, size_t nmemb, void *userdat
     return total;
 }
 
+// Barre de progression pour upload
 void show_upload_progress(double percentage, const char *filename, double speed) {
     int bar_width = 50;
     int pos = (int)(percentage * bar_width / 100.0);
@@ -112,7 +95,7 @@ int upload_progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow
 }
 
 // ============================================================================
-// UTILITAIRES
+// Utilitaires
 // ============================================================================
 
 void clean_string(char *str) {
@@ -133,7 +116,9 @@ void clean_string(char *str) {
     }
 }
 
-int parse_package_filename(const char *filename, package_meta_t *meta) {
+// Extraire les infos du package depuis le nom de fichier
+void parse_package_filename(const char *filename, char *name, char *version, 
+                            char *release, char *arch) {
     char temp[512];
     strncpy(temp, filename, sizeof(temp) - 1);
     temp[sizeof(temp) - 1] = '\0';
@@ -142,53 +127,52 @@ int parse_package_filename(const char *filename, package_meta_t *meta) {
     if (base) base++; else base = temp;
     
     char *ext = strstr(base, ".tar.bool");
-    if (!ext) return -1;
+    if (!ext) return;
     *ext = '\0';
     
     char *version_start = strstr(base, "-v");
-    if (!version_start) return -1;
+    if (!version_start) return;
     
     int name_len = version_start - base;
-    strncpy(meta->name, base, name_len);
-    meta->name[name_len] = '\0';
+    strncpy(name, base, name_len);
+    name[name_len] = '\0';
     
     char *release_start = strstr(version_start + 2, "-r");
     if (release_start) {
         int ver_len = release_start - (version_start + 2);
-        strncpy(meta->version, version_start + 2, ver_len);
-        meta->version[ver_len] = '\0';
+        strncpy(version, version_start + 2, ver_len);
+        version[ver_len] = '\0';
         
         char *arch_start = strchr(release_start + 2, '.');
         if (arch_start) {
             int rel_len = arch_start - (release_start + 2);
-            strncpy(meta->release, release_start + 2, rel_len);
-            meta->release[rel_len] = '\0';
+            strncpy(release, release_start + 2, rel_len);
+            release[rel_len] = '\0';
             
-            strncpy(meta->arch, arch_start + 1, 31);
-            meta->arch[31] = '\0';
+            strncpy(arch, arch_start + 1, 31);
+            arch[31] = '\0';
         }
     } else {
         char *arch_start = strchr(version_start + 2, '.');
         if (arch_start) {
             int ver_len = arch_start - (version_start + 2);
-            strncpy(meta->version, version_start + 2, ver_len);
-            meta->version[ver_len] = '\0';
-            strcpy(meta->release, "r0");
-            strncpy(meta->arch, arch_start + 1, 31);
-            meta->arch[31] = '\0';
+            strncpy(version, version_start + 2, ver_len);
+            version[ver_len] = '\0';
+            strcpy(release, "r0");
+            strncpy(arch, arch_start + 1, 31);
+            arch[31] = '\0';
         }
     }
-    
-    return 0;
 }
 
+// Charger la documentation
 char* load_documentation(char *buffer, size_t buffer_size) {
     buffer[0] = '\0';
     
+    // Chercher README.md
     const char *readme_files[] = {
         "README.md", "README", "readme.md",
-        "Readme.md", "docs/README.md", "README.txt",
-        "DOCS.md", "docs.md", NULL
+        "Readme.md", "docs/README.md", NULL
     };
     
     for (int i = 0; readme_files[i] != NULL; i++) {
@@ -209,20 +193,23 @@ char* load_documentation(char *buffer, size_t buffer_size) {
                     }
                 }
                 fclose(rf);
-                printf("[APSM] 📚 Loaded documentation from %s\n", readme_files[i]);
-                return buffer;
+                break;
             }
         }
     }
     
-    snprintf(buffer, buffer_size, "No documentation provided.");
+    if (strlen(buffer) == 0) {
+        snprintf(buffer, buffer_size, "No documentation provided.");
+    }
+    
     return buffer;
 }
 
 // ============================================================================
-// ZARCH HUB API
+// ZARCH HUB PUBLISHING
 // ============================================================================
 
+// Login à Zarch Hub
 int zarch_login(const char *username, const char *password, char *token, size_t token_size) {
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
@@ -247,8 +234,6 @@ int zarch_login(const char *username, const char *password, char *token, size_t 
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     
-    printf("[APSM] 🔐 Authenticating to Zarch Hub...\n");
-    
     CURLcode res = curl_easy_perform(curl);
     
     int success = -1;
@@ -261,9 +246,6 @@ int zarch_login(const char *username, const char *password, char *token, size_t 
                 strncpy(token, token_str, token_size - 1);
                 token[token_size - 1] = '\0';
                 success = 0;
-                printf("[APSM] ✅ Authentication successful\n");
-            } else {
-                printf("[APSM] ❌ Authentication failed: invalid response\n");
             }
             json_object_put(parsed);
         }
@@ -276,7 +258,10 @@ int zarch_login(const char *username, const char *password, char *token, size_t 
     return success;
 }
 
-int zarch_upload_package(const char *token, const char *filepath, package_meta_t *meta) {
+// Upload du package vers Zarch Hub
+int zarch_upload_package(const char *token, const char *filepath, 
+                         const char *name, const char *version,
+                         const char *release, const char *arch) {
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
     
@@ -293,9 +278,10 @@ int zarch_upload_package(const char *token, const char *filepath, package_meta_t
     }
     
     char url[512];
-    snprintf(url, sizeof(url), "%s/package/upload/public/%s", ZARCH_API_URL, meta->name);
+    snprintf(url, sizeof(url), "%s/package/upload/public/%s", ZARCH_API_URL, name);
     
     struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Authorization: Bearer");
     headers = curl_slist_append(headers, "Content-Type: multipart/form-data");
     
     struct curl_httppost *formpost = NULL;
@@ -309,17 +295,17 @@ int zarch_upload_package(const char *token, const char *filepath, package_meta_t
     
     curl_formadd(&formpost, &lastptr,
                  CURLFORM_COPYNAME, "version",
-                 CURLFORM_COPYCONTENTS, meta->version,
+                 CURLFORM_COPYCONTENTS, version,
                  CURLFORM_END);
     
     curl_formadd(&formpost, &lastptr,
                  CURLFORM_COPYNAME, "release",
-                 CURLFORM_COPYCONTENTS, meta->release,
+                 CURLFORM_COPYCONTENTS, release,
                  CURLFORM_END);
     
     curl_formadd(&formpost, &lastptr,
                  CURLFORM_COPYNAME, "arch",
-                 CURLFORM_COPYCONTENTS, meta->arch,
+                 CURLFORM_COPYCONTENTS, arch,
                  CURLFORM_END);
     
     upload_context_t ctx = {
@@ -328,7 +314,7 @@ int zarch_upload_package(const char *token, const char *filepath, package_meta_t
         .last_ulnow = 0,
         .total_size = file_stat.st_size
     };
-    snprintf(ctx.filename, sizeof(ctx.filename), "%s-%s", meta->name, meta->version);
+    strncpy(ctx.filename, name, sizeof(ctx.filename) - 1);
     
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -339,8 +325,7 @@ int zarch_upload_package(const char *token, const char *filepath, package_meta_t
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
     
     printf("[APSM] 📤 Uploading %s %s-%s (%s) - %.2f KB\n", 
-           meta->name, meta->version, meta->release, meta->arch, 
-           file_stat.st_size / 1024.0);
+           name, version, release, arch, file_stat.st_size / 1024.0);
     
     CURLcode res = curl_easy_perform(curl);
     fclose(file);
@@ -358,30 +343,134 @@ int zarch_upload_package(const char *token, const char *filepath, package_meta_t
     return 0;
 }
 
-int zarch_check_health(void) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return -1;
+// ============================================================================
+// PUBLISH COMMAND
+// ============================================================================
+
+int publish_package(const char *filepath) {
+    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("  APSM - Zarch Hub Publisher v2.0\n");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
     
-    char url[512];
-    snprintf(url, sizeof(url), "%s/health", ZARCH_HUB_URL);
+    // Vérifier que le fichier existe
+    if (access(filepath, F_OK) != 0) {
+        printf("[APSM] ❌ File not found: %s\n", filepath);
+        return -1;
+    }
     
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    // Extraire les infos du package
+    char name[256] = "", version[64] = "", release[16] = "r0", arch[32] = "x86_64";
+    parse_package_filename(filepath, name, version, release, arch);
     
-    CURLcode res = curl_easy_perform(curl);
-    curl_easy_cleanup(curl);
+    if (strlen(name) == 0) {
+        printf("[APSM] ❌ Could not parse package name from filename\n");
+        return -1;
+    }
     
-    return (res == CURLE_OK) ? 0 : -1;
+    printf("📦 Package: %s\n", name);
+    printf("📌 Version: %s\n", version);
+    printf("🔖 Release: %s\n", release);
+    printf("🔧 Arch:    %s\n", arch);
+    
+    // Calculer SHA256
+    char sha256[128];
+    if (calculate_sha256(filepath, sha256) == 0) {
+        printf("🔏 SHA256:  %.32s...\n", sha256);
+    }
+    
+    // Charger la documentation
+    char doc_content[MAX_DOC_SIZE] = "";
+    load_documentation(doc_content, sizeof(doc_content));
+    printf("📚 Documentation: %zu bytes\n", strlen(doc_content));
+    
+    // Demander les identifiants Zarch
+    printf("\n🔐 Zarch Hub Login\n");
+    printf("Username: ");
+    char username[256];
+    fgets(username, sizeof(username), stdin);
+    username[strcspn(username, "\n")] = 0;
+    
+    printf("Password: ");
+    char password[256];
+    fgets(password, sizeof(password), stdin);
+    password[strcspn(password, "\n")] = 0;
+    
+    char token[512];
+    if (zarch_login(username, password, token, sizeof(token)) != 0) {
+        printf("[APSM] ❌ Authentication failed\n");
+        return -1;
+    }
+    printf("[APSM] ✅ Authenticated as %s\n", username);
+    
+    // Upload du package
+    if (zarch_upload_package(token, filepath, name, version, release, arch) != 0) {
+        return -1;
+    }
+    
+    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("✅ Publication completed successfully!\n");
+    printf("📦 Package: %s %s-%s (%s)\n", name, version, release, arch);
+    printf("🔗 Zarch Hub: %s/package/public/%s/%s\n", 
+           ZARCH_HUB_URL, name, version);
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    
+    return 0;
 }
 
-int zarch_list_packages(output_format_t format) {
+// ============================================================================
+// AUTH COMMANDS
+// ============================================================================
+
+int auth_command(const char *username, const char *password) {
+    char token[512];
+    
+    if (zarch_login(username, password, token, sizeof(token)) == 0) {
+        // Sauvegarder le token avec BTSCRYPT
+        security_token_t sec_token;
+        strncpy(sec_token.token, token, sizeof(sec_token.token) - 1);
+        sec_token.last_update = time(NULL);
+        sec_token.validated = 1;
+        
+        if (security_save_token(&sec_token) == 0) {
+            printf("[APSM] ✅ Zarch token saved securely\n");
+            return 0;
+        }
+    }
+    
+    printf("[APSM] ❌ Authentication failed\n");
+    return -1;
+}
+
+int status_command(void) {
+    security_token_t token;
+    
+    if (security_load_token(&token) == 0) {
+        printf("[APSM] ✅ Authenticated to Zarch Hub\n");
+        printf("[APSM] 📁 Token: %s\n", TOKEN_PATH);
+        return 0;
+    }
+    
+    printf("[APSM] ❌ Not authenticated\n");
+    return -1;
+}
+
+int sync_command(void) {
+    printf("[APSM] Sync not needed for Zarch Hub\n");
+    return 0;
+}
+
+// ============================================================================
+// LIST COMMAND (Zarch packages)
+// ============================================================================
+
+int list_command(output_format_t format) {
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
     
     struct curl_response resp = {0};
     
     char url[512];
-    snprintf(url, sizeof(url), "%s/api/package/search?q=", ZARCH_HUB_URL);
+    snprintf(url, sizeof(url), "%s/package/search?q=", ZARCH_API_URL);
     
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -403,14 +492,14 @@ int zarch_list_packages(output_format_t format) {
                     
                     printf("\n📦 ZARCH HUB PACKAGES\n");
                     printf("═══════════════════════════════════════════\n");
-                    printf("%-20s %-12s %-15s %-10s %-8s\n", "NAME", "VERSION", "AUTHOR", "DOWNLOADS", "ARCH");
-                    printf("─────────────────────────────────────────────────────\n");
+                    printf("%-20s %-12s %-15s %-10s\n", "NAME", "VERSION", "AUTHOR", "DOWNLOADS");
+                    printf("───────────────────────────────────────────\n");
                     
                     for (int i = 0; i < len; i++) {
                         struct json_object *pkg = json_object_array_get_idx(results, i);
-                        struct json_object *name, *ver, *author, *downloads, *arch;
+                        struct json_object *name, *ver, *author, *downloads;
                         
-                        const char *n = "?", *v = "?", *a = "?", *ar = "?";
+                        const char *n = "?", *v = "?", *a = "?";
                         int d = 0;
                         
                         if (json_object_object_get_ex(pkg, "name", &name))
@@ -421,13 +510,11 @@ int zarch_list_packages(output_format_t format) {
                             a = json_object_get_string(author);
                         if (json_object_object_get_ex(pkg, "downloads", &downloads))
                             d = json_object_get_int(downloads);
-                        if (json_object_object_get_ex(pkg, "arch", &arch))
-                            ar = json_object_get_string(arch);
                         
-                        printf(" • %-20s %-12s %-15s %-10d %-8s\n", n, v, a, d, ar);
+                        printf(" • %-20s %-12s %-15s %-10d\n", n, v, a, d);
                     }
                     
-                    printf("═══════════════════════════════════════════════════════\n");
+                    printf("═══════════════════════════════════════════\n");
                     printf(" Total: %d packages\n", len);
                 }
                 json_object_put(parsed);
@@ -442,102 +529,8 @@ int zarch_list_packages(output_format_t format) {
 }
 
 // ============================================================================
-// COMMANDES
+// HELP
 // ============================================================================
-
-int cmd_push(const char *filepath) {
-    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    printf("  APSM - Zarch Hub Publisher v2.0\n");
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
-    
-    printf("🌐 Hub: %s\n", ZARCH_HUB_URL);
-    
-    // Vérifier la connexion
-    if (zarch_check_health() != 0) {
-        printf("[APSM] ❌ Cannot connect to Zarch Hub\n");
-        return -1;
-    }
-    printf("[APSM] ✅ Connected to Zarch Hub\n");
-    
-    // Vérifier le fichier
-    if (access(filepath, F_OK) != 0) {
-        printf("[APSM] ❌ File not found: %s\n", filepath);
-        return -1;
-    }
-    
-    // Parser les métadonnées
-    package_meta_t meta = {0};
-    if (parse_package_filename(filepath, &meta) != 0) {
-        printf("[APSM] ❌ Could not parse package metadata from filename\n");
-        return -1;
-    }
-    
-    printf("\n📦 Package: %s\n", meta.name);
-    printf("📌 Version: %s\n", meta.version);
-    printf("🔖 Release: %s\n", meta.release);
-    printf("🔧 Arch:    %s\n", meta.arch);
-    
-    // Calculer SHA256
-    if (calculate_sha256(filepath, meta.sha256) == 0) {
-        printf("🔏 SHA256:  %.32s...\n", meta.sha256);
-    }
-    
-    // Obtenir la taille
-    struct stat st;
-    stat(filepath, &st);
-    meta.size = st.st_size;
-    
-    // Charger la documentation
-    char doc_content[MAX_DOC_SIZE] = "";
-    load_documentation(doc_content, sizeof(doc_content));
-    printf("📚 Documentation: %zu bytes\n", strlen(doc_content));
-    
-    // Demander les identifiants
-    printf("\n🔐 Zarch Hub Login\n");
-    printf("Username: ");
-    char username[256];
-    fgets(username, sizeof(username), stdin);
-    username[strcspn(username, "\n")] = 0;
-    
-    printf("Password: ");
-    char password[256];
-    fgets(password, sizeof(password), stdin);
-    password[strcspn(password, "\n")] = 0;
-    
-    char token[512];
-    if (zarch_login(username, password, token, sizeof(token)) != 0) {
-        printf("[APSM] ❌ Authentication failed\n");
-        return -1;
-    }
-    
-    // Upload
-    if (zarch_upload_package(token, filepath, &meta) != 0) {
-        return -1;
-    }
-    
-    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    printf("✅ Publication completed successfully!\n");
-    printf("📦 Package: %s %s-%s (%s)\n", meta.name, meta.version, meta.release, meta.arch);
-    printf("🔗 Zarch Hub: %s/package/%s\n", ZARCH_HUB_URL, meta.name);
-    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    
-    return 0;
-}
-
-int cmd_list(output_format_t format) {
-    return zarch_list_packages(format);
-}
-
-int cmd_health(void) {
-    if (zarch_check_health() == 0) {
-        printf("[APSM] ✅ Zarch Hub is online\n");
-        printf("🌐 %s\n", ZARCH_HUB_URL);
-        return 0;
-    } else {
-        printf("[APSM] ❌ Zarch Hub is offline\n");
-        return -1;
-    }
-}
 
 void print_help(void) {
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
@@ -547,16 +540,16 @@ void print_help(void) {
     printf("  apsm <COMMAND> [OPTIONS]\n\n");
     printf("COMMANDS:\n");
     printf("  push <file>              Publish package to Zarch Hub\n");
+    printf("  login <user> [pass]      Authenticate to Zarch Hub\n");
+    printf("  status                   Check authentication status\n");
     printf("  list                     List packages on Zarch Hub\n");
-    printf("  health                   Check Zarch Hub connection\n");
-    printf("  help                     Show this help\n\n");
-    printf("OPTIONS:\n");
-    printf("  -j, --json               JSON output (for list)\n\n");
-    printf("EXAMPLES:\n");
+    printf("\nOPTIONS:\n");
+    printf("  -j, --json               JSON output\n");
+    printf("\nEXAMPLES:\n");
+    printf("  apsm login mauricio\n");
     printf("  apsm push build/apkm-v2.0.0-r1.x86_64.tar.bool\n");
     printf("  apsm list\n");
     printf("  apsm list --json\n");
-    printf("  apsm health\n");
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 }
 
@@ -570,6 +563,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    security_init();
+    
     output_format_t format = OUTPUT_TEXT;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--json") == 0 || strcmp(argv[i], "-j") == 0) {
@@ -582,13 +577,34 @@ int main(int argc, char *argv[]) {
             printf("[APSM] ❌ Missing file\n");
             return 1;
         }
-        return cmd_push(argv[2]);
+        return publish_package(argv[2]);
+    }
+    else if (strcmp(argv[1], "login") == 0) {
+        if (argc < 3) {
+            printf("[APSM] ❌ Missing username\n");
+            return 1;
+        }
+        
+        char *username = argv[2];
+        char *password = NULL;
+        
+        if (argc >= 4) {
+            password = argv[3];
+        } else {
+            printf("Password: ");
+            char pass[256];
+            fgets(pass, sizeof(pass), stdin);
+            pass[strcspn(pass, "\n")] = 0;
+            password = pass;
+        }
+        
+        return auth_command(username, password);
+    }
+    else if (strcmp(argv[1], "status") == 0) {
+        return status_command();
     }
     else if (strcmp(argv[1], "list") == 0) {
-        return cmd_list(format);
-    }
-    else if (strcmp(argv[1], "health") == 0) {
-        return cmd_health();
+        return list_command(format);
     }
     else if (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "--help") == 0) {
         print_help();
