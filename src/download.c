@@ -1,77 +1,140 @@
-// src/download.c corrigé
 #include "apkm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <curl/curl.h>
+#include <sys/stat.h>
 
-// Structure pour écrire le fichier téléchargé
+// ============================================================================
+// STRUCTURES
+// ============================================================================
+
 struct FileData {
     FILE *fp;
 };
+
+struct DownloadProgress {
+    double last_progress;
+    char filename[256];
+    time_t last_time;
+    curl_off_t last_dlnow;
+    double speed;
+};
+
+// ============================================================================
+// CALLBACKS STATIC
+// ============================================================================
 
 static size_t write_data(void *ptr, size_t size, size_t nmemb, void *stream) {
     struct FileData *out = (struct FileData *)stream;
     return fwrite(ptr, size, nmemb, out->fp);
 }
 
-void download_package(const char *pkg_name) {
-    CURL *curl;
-    CURLcode res;
-    char url[512];
-    char output_file[256];
-    char auth_header[512];
-    struct curl_slist *headers = NULL;
-
-    // 1. Charger le token déchiffré
-    extern char* load_token_from_home();  // Déclaration externe
-    char *token = load_token_from_home();
-
-    // 2. Préparer le chemin de sortie
-    snprintf(output_file, sizeof(output_file), "/tmp/%s.tar.bool", pkg_name);
+static int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
+                              curl_off_t ultotal, curl_off_t ulnow) {
+    (void)ultotal; (void)ulnow;
     
-    // URL
-    snprintf(url, sizeof(url), "https://raw.githubusercontent.com/gopu-inc/apkm-gest/main/build/%s.tar.bool", pkg_name);
-
-    curl = curl_easy_init();
-    if (curl) {
-        struct FileData file_data;
-        file_data.fp = fopen(output_file, "wb");
-        if (!file_data.fp) {
-            perror("[APKM] Erreur d'ouverture du fichier");
-            if (token) free(token);
-            return;
-        }
-
-        if (token) {
-            snprintf(auth_header, sizeof(auth_header), "Authorization: token %s", token);
-            headers = curl_slist_append(headers, auth_header);
-            printf("[APKM] Authentification active.\n");
-        }
-
-        headers = curl_slist_append(headers, "User-Agent: APKM-Installer");
-
-        printf("[APKM] Récupération de %s...\n", pkg_name);
+    struct DownloadProgress *prog = (struct DownloadProgress *)clientp;
+    
+    if (dltotal > 0) {
+        double percentage = (double)dlnow / (double)dltotal * 100.0;
         
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &file_data);
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-
-        res = curl_easy_perform(curl);
-        
-        fclose(file_data.fp);
-
-        if (res != CURLE_OK) {
-            fprintf(stderr, "[APKM] Échec du téléchargement: %s\n", curl_easy_strerror(res));
-            remove(output_file);
-        } else {
-            printf("[APKM] Paquet téléchargé: %s\n", output_file);
+        time_t now = time(NULL);
+        if (now > prog->last_time) {
+            curl_off_t diff = dlnow - prog->last_dlnow;
+            prog->speed = (double)diff / (now - prog->last_time);
+            prog->last_dlnow = dlnow;
+            prog->last_time = now;
         }
-
-        if (headers) curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
-        if (token) free(token);
+        
+        if (percentage - prog->last_progress >= 1.0 || percentage >= 100.0) {
+            int bar_width = 50;
+            int pos = (int)(percentage * bar_width / 100.0);
+            
+            printf("\r[");
+            for (int i = 0; i < bar_width; i++) {
+                if (i < pos) printf("=");
+                else if (i == pos && percentage < 100.0) printf(">");
+                else printf(" ");
+            }
+            
+            if (percentage >= 100.0) {
+                printf("] %3.0f%% %s - Complete        \n", percentage, prog->filename);
+            } else {
+                printf("] %3.0f%% %s - %.1f KB/s      ", 
+                       percentage, prog->filename, prog->speed / 1024.0);
+            }
+            fflush(stdout);
+            
+            prog->last_progress = percentage;
+        }
     }
+    return 0;
+}
+
+// ============================================================================
+// FONCTION DE TÉLÉCHARGEMENT (STATIC POUR ÉVITER LES DUPLICATIONS)
+// ============================================================================
+
+static int download_from_url(const char *url, const char *output_path, const char *display_name) {
+    CURL *curl = curl_easy_init();
+    if (!curl) return -1;
+    
+    struct FileData file_data;
+    file_data.fp = fopen(output_path, "wb");
+    if (!file_data.fp) {
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+    
+    struct DownloadProgress prog = {
+        .last_progress = 0,
+        .last_time = time(NULL),
+        .last_dlnow = 0,
+        .speed = 0
+    };
+    strncpy(prog.filename, display_name, sizeof(prog.filename) - 1);
+    
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &file_data);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &prog);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "APKM-Installer/2.0");
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    
+    CURLcode res = curl_easy_perform(curl);
+    fclose(file_data.fp);
+    
+    if (res != CURLE_OK) {
+        unlink(output_path);
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+    
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    
+    curl_easy_cleanup(curl);
+    
+    return (http_code == 200) ? 0 : -1;
+}
+
+// ============================================================================
+// API PUBLIQUE (UNE SEULE FONCTION EXPORTÉE)
+// ============================================================================
+
+int download_package(const char *name, const char *version, const char *output_path) {
+    char url[512];
+    
+    // Construire l'URL de téléchargement (à adapter selon votre dépôt)
+    snprintf(url, sizeof(url), 
+             "https://github.com/gopu-inc/apkm-gest/releases/download/v%s/%s-v%s-r1.x86_64.tar.bool",
+             version, name, version);
+    
+    printf("[DOWNLOAD] Fetching %s %s...\n", name, version);
+    
+    return download_from_url(url, output_path, name);
 }
