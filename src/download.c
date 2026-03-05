@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <curl/curl.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -127,7 +128,7 @@ static int download_from_url(const char *url, const char *output_path, const cha
 // API PUBLIQUE (UNE SEULE FONCTION EXPORTÉE)
 // ============================================================================
 
-int download_package(const char *name, const char *version, const char *output_path) {
+static int download_package(const char *name, const char *version, const char *output_path) {
     char url[512];
     
     // Construire l'URL de téléchargement (à adapter selon votre dépôt)

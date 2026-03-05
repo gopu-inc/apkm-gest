@@ -1,5 +1,6 @@
 #include "apkm.h"
 #include "security.h"
+extern void btscrypt_process(char *data, int encrypt);
 #include <curl/curl.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
@@ -9,29 +10,9 @@
 #include <time.h>
 
 // Fonctions de rotation BTSCRYPT
-static unsigned char bts_rotate_left(unsigned char val, int n) {
-    return (unsigned char)((val << n) | (val >> (8 - n)));
-}
 
-static unsigned char bts_rotate_right(unsigned char val, int n) {
-    return (unsigned char)((val >> n) | (val << (8 - n)));
-}
 
 // Implémentation complète de BTSCRYPT
-void btscrypt_process(char *data, int encrypt) {
-    if (!data) return;
-    
-    size_t len = strlen(data);
-    for (size_t i = 0; i < len; i++) {
-        if (encrypt) {
-            // Chiffrement: rotation left après XOR
-            data[i] = (char)bts_rotate_left((unsigned char)(data[i] ^ 0x1B), 3);
-        } else {
-            // Déchiffrement: XOR après rotation right
-            data[i] = (char)(bts_rotate_right((unsigned char)data[i], 3) ^ 0x1B);
-        }
-    }
-}
 
 int security_init(void) {
     // Créer les répertoires avec les permissions appropriées

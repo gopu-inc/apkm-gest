@@ -210,53 +210,6 @@ char* load_documentation(char *buffer, size_t buffer_size) {
 // ============================================================================
 
 // Login à Zarch Hub
-int zarch_login(const char *username, const char *password, char *token, size_t token_size) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return -1;
-    
-    struct curl_response resp = {0};
-    struct curl_slist *headers = NULL;
-    
-    char url[512];
-    snprintf(url, sizeof(url), "%s/auth/login", ZARCH_API_URL);
-    
-    char post_data[1024];
-    snprintf(post_data, sizeof(post_data),
-             "{\"username\":\"%s\",\"password\":\"%s\"}",
-             username, password);
-    
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-    
-    CURLcode res = curl_easy_perform(curl);
-    
-    int success = -1;
-    if (res == CURLE_OK && resp.data) {
-        struct json_object *parsed = json_tokener_parse(resp.data);
-        if (parsed) {
-            struct json_object *token_obj;
-            if (json_object_object_get_ex(parsed, "token", &token_obj)) {
-                const char *token_str = json_object_get_string(token_obj);
-                strncpy(token, token_str, token_size - 1);
-                token[token_size - 1] = '\0';
-                success = 0;
-            }
-            json_object_put(parsed);
-        }
-    }
-    
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    free(resp.data);
-    
-    return success;
-}
 
 // Upload du package vers Zarch Hub
 int zarch_upload_package(const char *token, const char *filepath, 
