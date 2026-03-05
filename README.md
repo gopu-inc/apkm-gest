@@ -75,7 +75,7 @@ bool --build
 **1. Authenticate with GitHub:**
 
 ```bash
-apsm auth ghp_your_token_here
+apsm login name password
 ```
 
 **1. Publish your package:**
@@ -87,9 +87,11 @@ apsm push build/myapp-v1.0.0-r1.x86_64.tar.bool
 **1. Your package is now available at:**
 
 ```
-https://github.com/gopu-inc/apkm-gest/releases/tag/v1.0.0-r1
+https://gsql-badge.onrender.com/packages
 ```
 
 ## License
 
 MIT License - Copyright (c) 2026 Gopu.inc
+
+> *apkm build ♥️ for gopu inc*
