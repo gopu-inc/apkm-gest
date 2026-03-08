@@ -1,80 +1,45 @@
-# ============================================================================
-# APKM - Advanced Package Manager
-# Professional CMake Configuration
-# Version: 2.0.0
-# ============================================================================
-
 cmake_minimum_required(VERSION 3.16)
 project(apkm VERSION 2.0.0 LANGUAGES C)
 
 # ============================================================================
-# Project Information
+# CONFIGURATION
 # ============================================================================
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-# Package information
-set(PACKAGE_NAME "apkm")
-set(PACKAGE_VENDOR "Gopu.inc")
-set(PACKAGE_DESCRIPTION "Advanced Package Manager for Alpine Linux")
-set(PACKAGE_HOMEPAGE_URL "https://github.com/gopu-inc/apkm-gest")
+# Options de build
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(BUILD_APSM "Build APSM tool" ON)
+option(BUILD_BOOL "Build BOOL tool" ON)
 
 # ============================================================================
-# Build Types
+# DÉFINITIONS
 # ============================================================================
 
-# Release build (default)
-set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type")
-
-# Optimized release flags
-set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG -m32 -march=i686 -mtune=generic")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -fomit-frame-pointer -funroll-loops")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -flto -fvisibility=hidden")
-
-# Debug build flags
-set(CMAKE_C_FLAGS_DEBUG "-g3 -ggdb -DDEBUG -D_DEBUG -m32")
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address -fsanitize=undefined")
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fno-omit-frame-pointer")
-
-# Common flags for all builds
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wpedantic")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshadow -Wformat=2 -Wconversion")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-prototypes -Wmissing-prototypes")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_FORTIFY_SOURCE=2 -fstack-protector-strong")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC -fPIE")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DAPKM_VERSION=\\\"${PROJECT_VERSION}\\\"")
-
-# Architecture-specific optimizations
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse2 -mfpmath=sse -ffast-math")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -falign-functions=16 -falign-loops=16")
+add_definitions(-D_GNU_SOURCE)
+add_definitions(-DAPKM_VERSION=\"${PROJECT_VERSION}\")
 
 # ============================================================================
-# Directories
+# CHEMINS
 # ============================================================================
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-# Include directories
-include_directories(
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/include/apkm
-)
+include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # ============================================================================
-# Find Required Packages
+# RECHERCHE DES BIBLIOTHÈQUES
 # ============================================================================
 
-# Required libraries
 find_package(CURL REQUIRED)
-find_package(SQLite3 REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 
-# Libraries via pkg-config
+pkg_check_modules(JSONC REQUIRED json-c)
 pkg_check_modules(LIBSODIUM REQUIRED libsodium)
 pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
 pkg_check_modules(LZ4 REQUIRED liblz4)
@@ -84,14 +49,25 @@ pkg_check_modules(JANSSON REQUIRED jansson)
 pkg_check_modules(ARGON2 REQUIRED libargon2)
 pkg_check_modules(SECCOMP REQUIRED libseccomp)
 pkg_check_modules(CAP_NG REQUIRED libcap-ng)
-pkg_check_modules(JSON_C REQUIRED json-c)
+pkg_check_modules(BLAKE3 REQUIRED libblake3)
 
 # ============================================================================
-# Source Files
+# VARIABLES GLOBALES
 # ============================================================================
 
-# Core library sources
-set(LIB_SOURCES
+set(ZARCH_HUB_URL "https://gsql-badge.onrender.com")
+set(ZARCH_API_URL "${ZARCH_HUB_URL}/v5.2")
+set(ZARCH_PACKAGE_URL "${ZARCH_HUB_URL}/package/download")
+
+add_definitions(-DZARCH_HUB_URL=\"${ZARCH_HUB_URL}\")
+add_definitions(-DZARCH_API_URL=\"${ZARCH_API_URL}\")
+add_definitions(-DZARCH_PACKAGE_URL=\"${ZARCH_PACKAGE_URL}\")
+
+# ============================================================================
+# SOURCES PRINCIPALES
+# ============================================================================
+
+set(CORE_SOURCES
     src/auth.c
     src/core.c
     src/crypto.c
@@ -101,58 +77,35 @@ set(LIB_SOURCES
     src/resolver.c
     src/sandbox.c
     src/security.c
+    src/zarch.c
 )
 
-# Main executable sources (exclude tools with their own main)
 set(APKM_SOURCES
-    ${LIB_SOURCES}
     src/main.c
+    ${CORE_SOURCES}
 )
 
-# Tool sources
 set(APSM_SOURCES
-    src/apsm.c
-    src/security.c
-    src/auth.c
+    src/aps/apsm.c
+    src/aps/auth.c
+    src/aps/security.c
 )
 
 set(BOOL_SOURCES
-    src/bool.c
-)
-
-# Public headers for installation
-set(PUBLIC_HEADERS
-    include/apkm.h
-    include/sandbox.h
-    include/security.h
+    src/bools/bool.c
 )
 
 # ============================================================================
-# Library Definitions
+# BIBLIOTHÈQUES PARTAGÉES
 # ============================================================================
 
-# Static library
-add_library(apkm_static STATIC ${LIB_SOURCES})
-set_target_properties(apkm_static PROPERTIES
-    OUTPUT_NAME apkm
-    CLEAN_DIRECT_OUTPUT 1
-)
+add_library(apkm_core STATIC ${CORE_SOURCES})
 
-# Shared library
-add_library(apkm_shared SHARED ${LIB_SOURCES})
-set_target_properties(apkm_shared PROPERTIES
-    OUTPUT_NAME apkm
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
-    CLEAN_DIRECT_OUTPUT 1
-)
-
-# Link libraries for both
-target_link_libraries(apkm_static
+target_link_libraries(apkm_core
     CURL::libcurl
-    SQLite::SQLite3
     OpenSSL::SSL
     OpenSSL::Crypto
+    ${JSONC_LDFLAGS}
     ${LIBSODIUM_LDFLAGS}
     ${LIBARCHIVE_LDFLAGS}
     ${LZ4_LDFLAGS}
@@ -162,36 +115,15 @@ target_link_libraries(apkm_static
     ${ARGON2_LDFLAGS}
     ${SECCOMP_LDFLAGS}
     ${CAP_NG_LDFLAGS}
-    ${JSON_C_LDFLAGS}
+    ${BLAKE3_LDFLAGS}
     pthread
     rt
     dl
     m
 )
 
-target_link_libraries(apkm_shared
-    CURL::libcurl
-    SQLite::SQLite3
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    ${LIBSODIUM_LDFLAGS}
-    ${LIBARCHIVE_LDFLAGS}
-    ${LZ4_LDFLAGS}
-    ${ZSTD_LDFLAGS}
-    ${YAML_LDFLAGS}
-    ${JANSSON_LDFLAGS}
-    ${ARGON2_LDFLAGS}
-    ${SECCOMP_LDFLAGS}
-    ${CAP_NG_LDFLAGS}
-    ${JSON_C_LDFLAGS}
-    pthread
-    rt
-    dl
-    m
-)
-
-# Add include directories for libraries
-target_include_directories(apkm_static PRIVATE
+target_include_directories(apkm_core PRIVATE
+    ${JSONC_INCLUDE_DIRS}
     ${LIBSODIUM_INCLUDE_DIRS}
     ${LIBARCHIVE_INCLUDE_DIRS}
     ${LZ4_INCLUDE_DIRS}
@@ -201,149 +133,98 @@ target_include_directories(apkm_static PRIVATE
     ${ARGON2_INCLUDE_DIRS}
     ${SECCOMP_INCLUDE_DIRS}
     ${CAP_NG_INCLUDE_DIRS}
-    ${JSON_C_INCLUDE_DIRS}
-)
-
-target_include_directories(apkm_shared PRIVATE
-    ${LIBSODIUM_INCLUDE_DIRS}
-    ${LIBARCHIVE_INCLUDE_DIRS}
-    ${LZ4_INCLUDE_DIRS}
-    ${ZSTD_INCLUDE_DIRS}
-    ${YAML_INCLUDE_DIRS}
-    ${JANSSON_INCLUDE_DIRS}
-    ${ARGON2_INCLUDE_DIRS}
-    ${SECCOMP_INCLUDE_DIRS}
-    ${CAP_NG_INCLUDE_DIRS}
-    ${JSON_C_INCLUDE_DIRS}
+    ${BLAKE3_INCLUDE_DIRS}
 )
 
 # ============================================================================
-# Executable Definitions
+# BINAIRES
 # ============================================================================
 
-# Main APKM executable
+# APKM
 add_executable(apkm ${APKM_SOURCES})
-target_link_libraries(apkm apkm_static)
+target_link_libraries(apkm apkm_core)
 set_target_properties(apkm PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# APSM tool
-add_executable(apsm ${APSM_SOURCES})
-target_link_libraries(apsm apkm_static)
-set_target_properties(apsm PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
+# APSM
+if(BUILD_APSM)
+    add_executable(apsm ${APSM_SOURCES})
+    target_link_libraries(apsm apkm_core)
+    set_target_properties(apsm PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+endif()
 
-# BOOL tool
-add_executable(bool ${BOOL_SOURCES})
-target_link_libraries(bool apkm_static)
-set_target_properties(bool PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
+# BOOL
+if(BUILD_BOOL)
+    add_executable(bool ${BOOL_SOURCES})
+    target_link_libraries(bool apkm_core)
+    set_target_properties(bool PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+endif()
 
 # ============================================================================
-# Installation
+# INSTALLATION
 # ============================================================================
 
-# Install binaries
-install(TARGETS apkm apsm bool
+install(TARGETS apkm
     RUNTIME DESTINATION bin
     COMPONENT applications
 )
 
-# Install libraries
-install(TARGETS apkm_static apkm_shared
-    ARCHIVE DESTINATION lib
-    LIBRARY DESTINATION lib
-    COMPONENT libraries
-)
+if(BUILD_APSM)
+    install(TARGETS apsm RUNTIME DESTINATION bin)
+endif()
 
-# Install headers
-install(FILES ${PUBLIC_HEADERS}
+if(BUILD_BOOL)
+    install(TARGETS bool RUNTIME DESTINATION bin)
+endif()
+
+install(FILES include/apkm.h include/security.h include/sandbox.h
     DESTINATION include/apkm
     COMPONENT development
 )
 
-# Install pkg-config file
-configure_file(
-    ${CMAKE_SOURCE_DIR}/cmake/apkm.pc.in
-    ${CMAKE_BINARY_DIR}/apkm.pc
-    @ONLY
-)
-
-install(FILES ${CMAKE_BINARY_DIR}/apkm.pc
-    DESTINATION lib/pkgconfig
-    COMPONENT development
-)
-
-# Install documentation
-install(FILES README.md
-    DESTINATION share/doc/apkm
-    COMPONENT documentation
-)
-
 # ============================================================================
-# Testing
+# TESTING
 # ============================================================================
 
 enable_testing()
 
-add_test(NAME version COMMAND apkm --version)
-add_test(NAME help COMMAND apkm --help)
-add_test(NAME apsm_help COMMAND apsm --help)
+add_test(NAME apkm_help COMMAND apkm --help)
+add_test(NAME apsm_help COMMAND apsm help)
 add_test(NAME bool_help COMMAND bool --help)
 
 # ============================================================================
-# Packaging
+# PACKAGING
 # ============================================================================
 
 set(CPACK_PACKAGE_NAME ${PROJECT_NAME})
-set(CPACK_PACKAGE_VENDOR ${PACKAGE_VENDOR})
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
-set(CPACK_PACKAGE_DESCRIPTION ${PACKAGE_DESCRIPTION})
-set(CPACK_PACKAGE_HOMEPAGE_URL ${PACKAGE_HOMEPAGE_URL})
-set(CPACK_PACKAGE_CONTACT "Mauricio <mauricio@email.com>")
+set(CPACK_PACKAGE_VENDOR "Gopu.inc")
+set(CPACK_PACKAGE_DESCRIPTION "APKM - Advanced Package Manager")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/gopu-inc/apkm-gest")
+set(CPACK_PACKAGE_CONTACT "ceoseshell@gmail.com")
 
 set(CPACK_GENERATOR "TGZ;DEB;RPM")
 set(CPACK_SOURCE_GENERATOR "TGZ")
 
-set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Mauricio")
-set(CPACK_DEBIAN_PACKAGE_SECTION "admin")
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6, libcurl4, libssl3, libsqlite3-0")
-
-set(CPACK_RPM_PACKAGE_LICENSE "MIT")
-set(CPACK_RPM_PACKAGE_GROUP "Development/Tools")
-
 include(CPack)
 
 # ============================================================================
-# Custom Targets
-# ============================================================================
-
-# Create documentation
-add_custom_target(docs
-    COMMAND ${CMAKE_COMMAND} -E echo "Generating documentation..."
-    COMMAND doxygen Doxyfile 2>/dev/null || true
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Generating API documentation"
-)
-
-# Clean everything
-add_custom_target(distclean
-    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}
-    COMMENT "Removing build directory"
-)
-
-# ============================================================================
-# Print summary
+# MESSAGES DE FIN
 # ============================================================================
 
 message(STATUS "========================================")
 message(STATUS "APKM v${PROJECT_VERSION} Configuration")
 message(STATUS "========================================")
-message(STATUS "Build type:    ${CMAKE_BUILD_TYPE}")
+message(STATUS "Zarch Hub URL: ${ZARCH_HUB_URL}")
+message(STATUS "Zarch API URL: ${ZARCH_API_URL}")
+message(STATUS "Build APSM: ${BUILD_APSM}")
+message(STATUS "Build BOOL: ${BUILD_BOOL}")
 message(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
-message(STATUS "Compiler:      ${CMAKE_C_COMPILER}")
-message(STATUS "Flags:         ${CMAKE_C_FLAGS}")
+message(STATUS "Compiler: ${CMAKE_C_COMPILER}")
+message(STATUS "Flags: ${CMAKE_C_FLAGS}")
 message(STATUS "========================================")
