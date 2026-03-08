@@ -8,14 +8,18 @@ BINDIR = bin
 
 .PHONY: all clean
 
-all: $(BINDIR)/apkm $(BINDIR)/apsm
+all: $(BINDIR)/apkm $(BINDIR)/apsm $(BINDIR)/bool
 	@echo "✅ Build complete"
 
-$(BINDIR)/apkm: $(SRCDIR)/main.c
+$(BINDIR)/apkm: $(SRCDIR)/main.c $(filter-out $(SRCDIR)/aps/apsm.c $(SRCDIR)/bools/bool.c, $(wildcard $(SRCDIR)/*.c))
 	mkdir -p $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-$(BINDIR)/apsm: $(SRCDIR)/apsm.c $(SRCDIR)/auth.c $(SRCDIR)/security.c
+$(BINDIR)/apsm: $(SRCDIR)/aps/apsm.c $(SRCDIR)/aps/auth.c $(SRCDIR)/aps/security.c
+	mkdir -p $(BINDIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+$(BINDIR)/bool: $(SRCDIR)/bools/bool.c
 	mkdir -p $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
