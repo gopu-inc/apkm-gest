@@ -17,10 +17,6 @@ team created new release logiciel
 #define APKM_VERSION "2.0.0"
 #define APKM_CODENAME "Zarch Edition"
 
-// Zarch Hub Configuration
-#define ZARCH_HUB_URL "https://gsql-badge.onrender.com"
-#define ZARCH_API_URL ZARCH_HUB_URL "/api"
-#define ZARCH_PACKAGE_URL ZARCH_HUB_URL "/package/download"
 
 // GitHub uniquement pour DATA.db
 #define GITHUB_REPO_OWNER "Mauricio-100"
