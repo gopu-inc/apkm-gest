@@ -131,7 +131,7 @@ static size_t response_callback(void *ptr, size_t size, size_t nmemb, void *user
 // FONCTIONS DE TÉLÉCHARGEMENT GITHUB
 // ============================================================================
 
-int github_download_file(const char *path, const char *output_path) {
+static int github_download_file(const char *path, const char *output_path) {
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
     
@@ -168,7 +168,7 @@ int github_download_file(const char *path, const char *output_path) {
     return (http_code == 200) ? 0 : -1;
 }
 
-char* github_fetch_string(const char *path) {
+static char* github_fetch_string(const char *path) {
     CURL *curl = curl_easy_init();
     if (!curl) return NULL;
     
@@ -199,7 +199,7 @@ char* github_fetch_string(const char *path) {
 // BASE DE DONNÉES SQLITE DES PACKAGES
 // ============================================================================
 
-int db_init(void) {
+static int db_init(void) {
     mkdir(APKM_DB_PATH, 0755);
     
     char db_path[512];
@@ -284,7 +284,7 @@ int db_init(void) {
     return 0;
 }
 
-int db_sync_from_github(void) {
+static int db_sync_from_github(void) {
     printf("[DB] Syncing package database from GitHub...\n");
     
     // Télécharger le fichier DATA.db depuis GitHub
@@ -371,7 +371,7 @@ int db_sync_from_github(void) {
     return 0;
 }
 
-int db_search_packages(const char *pattern, package_t *results, int max_results) {
+static int db_search_packages(const char *pattern, package_t *results, int max_results) {
     char db_path[512];
     snprintf(db_path, sizeof(db_path), "%s/packages.db", APKM_DB_PATH);
     
@@ -428,7 +428,7 @@ int db_search_packages(const char *pattern, package_t *results, int max_results)
     return count;
 }
 
-package_t* db_get_package(const char *name, const char *version) {
+static package_t* db_get_package(const char *name, const char *version) {
     char db_path[512];
     snprintf(db_path, sizeof(db_path), "%s/packages.db", APKM_DB_PATH);
     
@@ -489,7 +489,7 @@ package_t* db_get_package(const char *name, const char *version) {
     return pkg;
 }
 
-int db_register_installed(const char *name, const char *version, 
+static int db_register_installed(const char *name, const char *version, 
                           const char *release, const char *arch,
                           const char *binary_path) {
     char db_path[512];
@@ -523,7 +523,7 @@ int db_register_installed(const char *name, const char *version,
     return (rc == SQLITE_OK) ? 0 : -1;
 }
 
-int db_list_installed(package_t *results, int max_results) {
+static int db_list_installed(package_t *results, int max_results) {
     char db_path[512];
     snprintf(db_path, sizeof(db_path), "%s/packages.db", APKM_DB_PATH);
     
@@ -564,10 +564,10 @@ int db_list_installed(package_t *results, int max_results) {
 }
 
 // ============================================================================
-// FONCTIONS DE TÉLÉCHARGEMENT DE PACKAGES
+// FONCTIONS DE TÉLÉCHARGEMENT DE PACKAGES (STATIC POUR ÉVITER LES DOUBLONS)
 // ============================================================================
 
-int download_package(const char *name, const char *version, const char *output_path) {
+static int download_package(const char *name, const char *version, const char *output_path) {
     // Chercher le package dans la base
     package_t *pkg = db_get_package(name, version);
     if (!pkg) {
@@ -635,7 +635,7 @@ int download_package(const char *name, const char *version, const char *output_p
 // FONCTIONS D'INSTALLATION
 // ============================================================================
 
-int extract_package(const char *filepath, const char *dest_path) {
+static int extract_package(const char *filepath, const char *dest_path) {
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "tar -xzf '%s' -C '%s' 2>/dev/null", filepath, dest_path);
     
@@ -647,7 +647,7 @@ int extract_package(const char *filepath, const char *dest_path) {
     return -1;
 }
 
-int run_install_script(const char *staging_path, const char *pkg_name) {
+static int run_install_script(const char *staging_path, const char *pkg_name) {
     const char *scripts[] = {
         "install.sh", "INSTALL.sh", "post-install.sh", 
         "setup.sh", "configure.sh", NULL
