@@ -9,9 +9,8 @@
 #include "apkm.h"
 #include "security.h"
 
-#define ZARCH_HUB_URL "https://gsql-badge.onrender.com"
-#define ZARCH_API_URL ZARCH_HUB_URL "/v5.2"
-#define TOKEN_PATH "/usr/local/share/apkm/PROTOCOLE/security/tokens/auth.token"
+// Enlever les redéfinitions, utiliser celles de apkm.h
+// Ne PAS redéfinir ZARCH_API_URL, utiliser celle de apkm.h
 
 struct curl_response {
     char *data;
@@ -30,6 +29,68 @@ static size_t write_callback(void *ptr, size_t size, size_t nmemb, void *userdat
     resp->data[resp->size] = '\0';
     
     return total;
+}
+
+// Version corrigée - correspond à la déclaration dans apkm.h
+int zarch_login(const char *username, const char *password, char *token, size_t token_size) {
+    CURL *curl = curl_easy_init();
+    if (!curl) return -1;
+    
+    struct curl_response resp = {0};
+    struct curl_slist *headers = NULL;
+    
+    char url[512];
+    snprintf(url, sizeof(url), "%s/auth/login", ZARCH_API_URL);
+    
+    char post_data[1024];
+    snprintf(post_data, sizeof(post_data),
+             "{\"username\":\"%s\",\"password\":\"%s\"}",
+             username, password);
+    
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    
+    printf("[APSM] 🔐 Authenticating to Zarch Hub...\n");
+    
+    CURLcode res = curl_easy_perform(curl);
+    
+    int success = -1;
+    if (res == CURLE_OK && resp.data) {
+        struct json_object *parsed = json_tokener_parse(resp.data);
+        if (parsed) {
+            struct json_object *success_obj, *token_obj;
+            if (json_object_object_get_ex(parsed, "success", &success_obj) &&
+                json_object_get_boolean(success_obj) &&
+                json_object_object_get_ex(parsed, "token", &token_obj)) {
+                const char *token_str = json_object_get_string(token_obj);
+                strncpy(token, token_str, token_size - 1);
+                token[token_size - 1] = '\0';
+                success = 0;
+                printf("[APSM] ✅ Authentication successful\n");
+            } else {
+                struct json_object *error_obj;
+                if (json_object_object_get_ex(parsed, "error", &error_obj)) {
+                    printf("[APSM] ❌ Authentication failed: %s\n", 
+                           json_object_get_string(error_obj));
+                } else {
+                    printf("[APSM] ❌ Authentication failed\n");
+                }
+            }
+            json_object_put(parsed);
+        }
+    }
+    
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    free(resp.data);
+    
+    return success;
 }
 
 // Fonction pour sauvegarder le token
@@ -70,72 +131,8 @@ static char* load_token(void) {
     return NULL;
 }
 
-// Login à Zarch Hub
-int zarch_login(const char *username, const char *password) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return -1;
-    
-    struct curl_response resp = {0};
-    struct curl_slist *headers = NULL;
-    
-    char url[512];
-    snprintf(url, sizeof(url), "%s/auth/login", ZARCH_API_URL);
-    
-    char post_data[1024];
-    snprintf(post_data, sizeof(post_data),
-             "{\"username\":\"%s\",\"password\":\"%s\"}",
-             username, password);
-    
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-    
-    printf("[APSM] 🔐 Authenticating to Zarch Hub...\n");
-    
-    CURLcode res = curl_easy_perform(curl);
-    
-    int success = -1;
-    if (res == CURLE_OK && resp.data) {
-        struct json_object *parsed = json_tokener_parse(resp.data);
-        if (parsed) {
-            struct json_object *success_obj, *token_obj;
-            if (json_object_object_get_ex(parsed, "success", &success_obj) &&
-                json_object_get_boolean(success_obj) &&
-                json_object_object_get_ex(parsed, "token", &token_obj)) {
-                const char *token = json_object_get_string(token_obj);
-                save_token(token);
-                success = 0;
-                printf("[APSM] ✅ Authentication successful\n");
-                printf("[APSM] 🔑 Token saved to %s\n", TOKEN_PATH);
-            } else {
-                struct json_object *error_obj;
-                if (json_object_object_get_ex(parsed, "error", &error_obj)) {
-                    printf("[APSM] ❌ Authentication failed: %s\n", 
-                           json_object_get_string(error_obj));
-                } else {
-                    printf("[APSM] ❌ Authentication failed\n");
-                }
-            }
-            json_object_put(parsed);
-        }
-    } else {
-        printf("[APSM] ❌ Connection failed: %s\n", curl_easy_strerror(res));
-    }
-    
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    free(resp.data);
-    
-    return success;
-}
-
 // Upload du package vers Zarch Hub
-int zarch_upload_package(const char *filepath, const char *name, const char *version,
+static int zarch_upload_package(const char *filepath, const char *name, const char *version,
                          const char *release, const char *arch) {
     // Charger le token
     char *token = load_token();
@@ -193,9 +190,6 @@ int zarch_upload_package(const char *filepath, const char *name, const char *ver
     printf("[APSM] 📤 Uploading %s %s-%s (%s) - %.2f KB\n", 
            name, version, release, arch, file_stat.st_size / 1024.0);
     
-    // Barre de progression simple
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    
     CURLcode res = curl_easy_perform(curl);
     
     curl_formfree(formpost);
@@ -212,7 +206,7 @@ int zarch_upload_package(const char *filepath, const char *name, const char *ver
 }
 
 // Parse le nom du fichier
-void parse_filename(const char *filename, char *name, char *version, 
+static void parse_filename(const char *filename, char *name, char *version, 
                     char *release, char *arch) {
     char temp[512];
     strncpy(temp, filename, sizeof(temp) - 1);
@@ -251,7 +245,7 @@ void parse_filename(const char *filename, char *name, char *version,
     }
 }
 
-int publish_package(const char *filepath) {
+static int publish_package(const char *filepath) {
     printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     printf("  APSM - Zarch Hub Publisher v2.0\n");
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
@@ -278,9 +272,10 @@ int publish_package(const char *filepath) {
     return zarch_upload_package(filepath, name, version, release, arch);
 }
 
-int cmd_login(void) {
+static int cmd_login(void) {
     char username[256];
     char password[256];
+    char token[512];
     
     printf("\n🔐 Zarch Hub Login\n");
     printf("━━━━━━━━━━━━━━━━━━\n\n");
@@ -293,7 +288,7 @@ int cmd_login(void) {
     printf("Password: ");
     fflush(stdout);
     
-    // Désactiver l'écho pour le mot de passe (version simple)
+    // Désactiver l'écho pour le mot de passe
     system("stty -echo");
     if (!fgets(password, sizeof(password), stdin)) {
         system("stty echo");
@@ -304,16 +299,20 @@ int cmd_login(void) {
     
     password[strcspn(password, "\n")] = 0;
     
-    return zarch_login(username, password);
+    int result = zarch_login(username, password, token, sizeof(token));
+    if (result == 0) {
+        save_token(token);
+        printf("[APSM] 🔑 Token saved to %s\n", TOKEN_PATH);
+    }
+    
+    return result;
 }
 
-int cmd_status(void) {
+static int cmd_status(void) {
     char *token = load_token();
     if (token) {
         printf("[APSM] ✅ Authenticated\n");
         printf("[APSM] 🔑 Token: %s\n", token);
-        
-        // Optionnel: vérifier si le token est toujours valide
         printf("[APSM] ℹ️  Use 'apsm logout' to remove token\n");
         return 0;
     } else {
@@ -323,7 +322,7 @@ int cmd_status(void) {
     }
 }
 
-int cmd_logout(void) {
+static int cmd_logout(void) {
     if (unlink(TOKEN_PATH) == 0) {
         printf("[APSM] ✅ Logged out successfully\n");
         return 0;
