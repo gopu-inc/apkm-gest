@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include "apkm.h"
 #include <json-c/json.h>
+#include <stdarg.h>
 
 #define ZARCH_HUB_URL "https://gsql-badge.onrender.com"
 #define ZARCH_API_URL ZARCH_HUB_URL "/v5.2"
