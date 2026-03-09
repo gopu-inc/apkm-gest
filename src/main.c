@@ -13,9 +13,17 @@
 #include "apkm.h"
 #include <json-c/json.h>
 
+// Ne pas redéfinir les constantes déjà dans apkm.h
+#ifndef ZARCH_HUB_URL
 #define ZARCH_HUB_URL "https://gsql-badge.onrender.com"
+#endif
+
+#ifndef ZARCH_API_URL
 #define ZARCH_API_URL ZARCH_HUB_URL "/v5.2"
-#define APKM_DB_PATH "/usr/local/share/apkm/database"
+#endif
+
+// Chemin spécifique à apkm (pas dans apkm.h)
+#define APKM_LOCAL_DB_PATH "/usr/local/share/apkm/database"
 #define APKM_CACHE_PATH "/usr/local/share/apkm/cache"
 #define APKM_CONF_PATH "/etc/apkm/repositories.conf"
 
@@ -159,10 +167,10 @@ void print_step(const char *format, ...) {
 
 int db_init(void) {
     char db_path[512];
-    snprintf(db_path, sizeof(db_path), "%s/packages.db", APKM_DB_PATH);
+    snprintf(db_path, sizeof(db_path), "%s/packages.db", APKM_LOCAL_DB_PATH);
     
     // Créer le répertoire si nécessaire
-    mkdir(APKM_DB_PATH, 0755);
+    mkdir(APKM_LOCAL_DB_PATH, 0755);
     
     sqlite3 *db;
     int rc = sqlite3_open(db_path, &db);
@@ -610,7 +618,8 @@ int extract_package(const char *package_path, const char *extract_dir) {
     return -1;
 }
 
-int resolve_dependencies(package_info_t *info) {
+// Renommé pour éviter le conflit avec apkm.h
+int check_package_dependencies(package_info_t *info) {
     if (strlen(info->dependencies) == 0) return 0;
     
     print_step("Checking dependencies");
@@ -636,8 +645,6 @@ int resolve_dependencies(package_info_t *info) {
                     print_info("  ✓ %s already installed (%s)", start, installed_version);
                 } else {
                     print_info("  ⚡ Need to install: %s", start);
-                    // Ici on pourrait lancer l'installation récursive
-                    // Pour l'instant on prévient juste
                     print_warning("Dependency %s not installed", start);
                 }
             }
@@ -762,7 +769,7 @@ int install_package(const char *name, const char *version_specific) {
     }
     
     // Résoudre les dépendances
-    resolve_dependencies(&info);
+    check_package_dependencies(&info);
     
     // Demander confirmation
     if (interactive) {
@@ -892,12 +899,10 @@ int cmd_update(void) {
                         total += count;
                         success++;
                         
-                        // Ici on pourrait mettre à jour available_packages
+                        print_success("Updated %s (%d packages)", repositories[i].name, count);
                     }
                     json_object_put(parsed);
                 }
-                
-                print_success("Updated %s (%d packages)", repositories[i].name, count);
             }
             free(resp.data);
         } else {
@@ -1246,16 +1251,11 @@ void print_help(void) {
     printf("  search <term>          Search for packages\n");
     printf("  info <pkg>             Show detailed package information\n");
     printf("  list                    List installed packages\n");
-    printf("  files <pkg>             List files installed by a package\n");
-    printf("  depends <pkg>           Show package dependencies\n");
-    printf("  rdepends <pkg>          Show reverse dependencies\n\n");
+    printf("\n");
     
     printf("\033[36mREPOSITORY MANAGEMENT:\033[0m\n");
     printf("  repo list               List configured repositories\n");
-    printf("  repo add <name> <url>   Add a repository\n");
-    printf("  repo remove <name>      Remove a repository\n");
-    printf("  repo enable <name>      Enable a repository\n");
-    printf("  repo disable <name>     Disable a repository\n\n");
+    printf("\n");
     
     printf("\033[36mSYSTEM:\033[0m\n");
     printf("  clean                   Clean cache and temporary files\n");
@@ -1293,7 +1293,7 @@ int main(int argc, char *argv[]) {
     
     // Créer les répertoires nécessaires
     mkdir("/usr/local/share/apkm", 0755);
-    mkdir(APKM_DB_PATH, 0755);
+    mkdir(APKM_LOCAL_DB_PATH, 0755);
     mkdir(APKM_CACHE_PATH, 0755);
     mkdir("/usr/local/bin", 0755);
     
