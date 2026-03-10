@@ -1,0 +1,7 @@
+// Signature BOOL intégrée dans le binaire
+static const char BOOL_SIGNATURE[] = 
+    "[2.0]: SELP bool (c) 2026 003x2022 223222x22 "
+    "SELPv1 CRYPT AES-256 SIG SHA256 "
+    "COMPRESS: LZ77+RLE+HUFFMAN "
+    "MAGIC: 0x53454C50";  // "SELP" en hex
+    
