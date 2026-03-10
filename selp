@@ -1,0 +1,21 @@
+#!/bin/sh
+# /usr/local/bin/selp - Wrapper pour afficher les infos SELP
+
+if [ $# -eq 0 ]; then
+    echo "Usage: selp <fichier.selp.bool>"
+    exit 1
+fi
+
+file="$1"
+if [ ! -f "$file" ]; then
+    echo "Fichier non trouvé: $file"
+    exit 1
+fi
+
+# Vérifier l'en-tête
+if head -c 4 "$file" | grep -q "SELP"; then
+    echo "[SELP PASSIB LAB SOCKET 2001x006]"
+    bool --magic "$file"
+else
+    file "$file"
+fi
