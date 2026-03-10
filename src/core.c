@@ -33,7 +33,7 @@
 #define MAX_PACKAGES 1024
 #define MAX_DEPENDENCIES 256
 #define CACHE_TTL 3600 // 1 heure
-#define GITHUB_API_TIMEOUT 30
+#define ZARCH_API_TIMEOUT 30
 
 #ifndef SIG_BLOCK
 #define SIG_BLOCK 0
@@ -128,74 +128,6 @@ static size_t response_callback(void *ptr, size_t size, size_t nmemb, void *user
 }
 
 // ============================================================================
-// FONCTIONS DE TÉLÉCHARGEMENT GITHUB
-// ============================================================================
-
-static int github_download_file(const char *path, const char *output_path) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return -1;
-    
-    char url[512];
-    snprintf(url, sizeof(url), "%s/%s", GITHUB_RAW_URL, path);
-    
-    FILE *fp = fopen(output_path, "wb");
-    if (!fp) {
-        curl_easy_cleanup(curl);
-        return -1;
-    }
-    
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "APKM/2.0");
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, GITHUB_API_TIMEOUT);
-    
-    CURLcode res = curl_easy_perform(curl);
-    fclose(fp);
-    
-    if (res != CURLE_OK) {
-        unlink(output_path);
-        curl_easy_cleanup(curl);
-        return -1;
-    }
-    
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    
-    curl_easy_cleanup(curl);
-    
-    return (http_code == 200) ? 0 : -1;
-}
-
-static char* github_fetch_string(const char *path) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return NULL;
-    
-    struct curl_response resp = {0};
-    
-    char url[512];
-    snprintf(url, sizeof(url), "%s/%s", GITHUB_RAW_URL, path);
-    
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "APKM/2.0");
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, GITHUB_API_TIMEOUT);
-    
-    CURLcode res = curl_easy_perform(curl);
-    curl_easy_cleanup(curl);
-    
-    if (res == CURLE_OK && resp.data) {
-        return resp.data;
-    }
-    
-    free(resp.data);
-    return NULL;
-}
-
-// ============================================================================
 // BASE DE DONNÉES SQLITE DES PACKAGES
 // ============================================================================
 
@@ -253,7 +185,7 @@ static int db_init(void) {
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
         "name TEXT UNIQUE NOT NULL,"
         "url TEXT NOT NULL,"
-        "type TEXT DEFAULT 'github',"
+        "type TEXT DEFAULT 'zarch',"
         "enabled INTEGER DEFAULT 1,"
         "last_sync INTEGER"
         ");";
@@ -274,100 +206,13 @@ static int db_init(void) {
     // Ajouter le dépôt par défaut
     const char *sql_add_repo = 
         "INSERT OR IGNORE INTO repositories (name, url, type) VALUES "
-        "('apkm-gest', 'https://github.com/gopu-inc/apkm-gest', 'github');";
+        "('zarch-hub', 'https://gsql-badge.onrender.com', 'zarch');";
     
     sqlite3_exec(db, sql_add_repo, NULL, NULL, NULL);
     
     sqlite3_close(db);
     
     printf("[DB] Database initialized at %s\n", db_path);
-    return 0;
-}
-
-static int db_sync_from_github(void) {
-    printf("[DB] Syncing package database from GitHub...\n");
-    
-    // Télécharger le fichier DATA.db depuis GitHub
-    char tmp_path[512];
-    snprintf(tmp_path, sizeof(tmp_path), "/tmp/apkm_DATA.db");
-    
-    if (github_download_file("DATA.db", tmp_path) != 0) {
-        fprintf(stderr, "[DB] Failed to download DATA.db from GitHub\n");
-        return -1;
-    }
-    
-    // Ouvrir la base de données temporaire
-    sqlite3 *tmp_db;
-    if (sqlite3_open(tmp_path, &tmp_db) != SQLITE_OK) {
-        fprintf(stderr, "[DB] Failed to open downloaded database\n");
-        unlink(tmp_path);
-        return -1;
-    }
-    
-    // Ouvrir la base de données principale
-    char db_path[512];
-    snprintf(db_path, sizeof(db_path), "%s/packages.db", APKM_DB_PATH);
-    
-    sqlite3 *main_db;
-    if (sqlite3_open(db_path, &main_db) != SQLITE_OK) {
-        sqlite3_close(tmp_db);
-        unlink(tmp_path);
-        return -1;
-    }
-    
-    // Commencer une transaction
-    sqlite3_exec(main_db, "BEGIN TRANSACTION;", NULL, NULL, NULL);
-    
-    // Vider la table available_packages
-    sqlite3_exec(main_db, "DELETE FROM available_packages;", NULL, NULL, NULL);
-    
-    // Copier les données depuis la base temporaire
-    sqlite3_stmt *stmt;
-    const char *sql_select = "SELECT name, version, release, architecture, "
-                              "description, maintainer, license, url, "
-                              "sha256, size, download_url FROM packages;";
-    
-    if (sqlite3_prepare_v2(tmp_db, sql_select, -1, &stmt, NULL) == SQLITE_OK) {
-        const char *sql_insert = 
-            "INSERT INTO available_packages "
-            "(name, version, release, architecture, description, maintainer, "
-            "license, url, sha256, size, download_url, last_update) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'));";
-        
-        sqlite3_stmt *insert_stmt;
-        sqlite3_prepare_v2(main_db, sql_insert, -1, &insert_stmt, NULL);
-        
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            sqlite3_bind_text(insert_stmt, 1, (const char*)sqlite3_column_text(stmt, 0), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insert_stmt, 2, (const char*)sqlite3_column_text(stmt, 1), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insert_stmt, 3, (const char*)sqlite3_column_text(stmt, 2), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insert_stmt, 4, (const char*)sqlite3_column_text(stmt, 3), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insert_stmt, 5, (const char*)sqlite3_column_text(stmt, 4), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insert_stmt, 6, (const char*)sqlite3_column_text(stmt, 5), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insert_stmt, 7, (const char*)sqlite3_column_text(stmt, 6), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insert_stmt, 8, (const char*)sqlite3_column_text(stmt, 7), -1, SQLITE_STATIC);
-            sqlite3_bind_text(insert_stmt, 9, (const char*)sqlite3_column_text(stmt, 8), -1, SQLITE_STATIC);
-            sqlite3_bind_int64(insert_stmt, 10, sqlite3_column_int(stmt, 9));
-            sqlite3_bind_text(insert_stmt, 11, (const char*)sqlite3_column_text(stmt, 10), -1, SQLITE_STATIC);
-            
-            sqlite3_step(insert_stmt);
-            sqlite3_reset(insert_stmt);
-            sqlite3_clear_bindings(insert_stmt);
-        }
-        
-        sqlite3_finalize(insert_stmt);
-        sqlite3_finalize(stmt);
-    }
-    
-    // Valider la transaction
-    sqlite3_exec(main_db, "COMMIT;", NULL, NULL, NULL);
-    
-    sqlite3_close(main_db);
-    sqlite3_close(tmp_db);
-    
-    unlink(tmp_path);
-    
-    printf("[DB] Sync completed successfully\n");
     return 0;
 }
 
@@ -564,7 +409,7 @@ static int db_list_installed(package_t *results, int max_results) {
 }
 
 // ============================================================================
-// FONCTIONS DE TÉLÉCHARGEMENT DE PACKAGES (STATIC POUR ÉVITER LES DOUBLONS)
+// FONCTIONS DE TÉLÉCHARGEMENT DE PACKAGES
 // ============================================================================
 
 static int download_package(const char *name, const char *version, const char *output_path) {
@@ -575,15 +420,11 @@ static int download_package(const char *name, const char *version, const char *o
         return -1;
     }
     
-    // Construire l'URL de téléchargement
+    // Construire l'URL de téléchargement (Zarch Hub)
     char url[512];
-    if (strlen(pkg->url) > 0) {
-        strncpy(url, pkg->url, sizeof(url)-1);
-    } else {
-        snprintf(url, sizeof(url), 
-                 "https://github.com/gopu-inc/apkm-gest/releases/download/v%s/%s-v%s-%s.%s.tar.bool",
-                 version, name, version, pkg->release, pkg->architecture);
-    }
+    snprintf(url, sizeof(url), 
+             "%s/package/download/public/%s/%s/%s/%s",
+             ZARCH_HUB_URL, name, version, pkg->release, pkg->architecture);
     
     printf("[APKM] Downloading %s %s from %s\n", name, version, url);
     
@@ -632,17 +473,40 @@ static int download_package(const char *name, const char *version, const char *o
 }
 
 // ============================================================================
-// FONCTIONS D'INSTALLATION
+// FONCTIONS D'INSTALLATION (avec BOOL)
 // ============================================================================
 
+// Vérifie que la commande bool est disponible
+static int check_bool_available(void) {
+    if (system("which bool > /dev/null 2>&1") == 0) {
+        return 1;
+    }
+    fprintf(stderr, "[APKM] Error: 'bool' command not found. Please install BOOL.\n");
+    return 0;
+}
+
 static int extract_package(const char *filepath, const char *dest_path) {
+    if (!check_bool_available()) return -1;
+    
     char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "tar -xzf '%s' -C '%s' 2>/dev/null", filepath, dest_path);
     
-    if (system(cmd) == 0) return 0;
+    // Créer le répertoire de destination s'il n'existe pas
+    mkdir(dest_path, 0755);
     
-    snprintf(cmd, sizeof(cmd), "tar -xf '%s' -C '%s' 2>/dev/null", filepath, dest_path);
-    if (system(cmd) == 0) return 0;
+    // Utiliser bool pour extraire (option -x)
+    snprintf(cmd, sizeof(cmd), "bool -x '%s' '%s' 2>/dev/null", filepath, dest_path);
+    
+    if (system(cmd) == 0) {
+        // Vérifier que des fichiers ont été extraits
+        snprintf(cmd, sizeof(cmd), "ls -A '%s' | wc -l", dest_path);
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            int count = 0;
+            fscanf(fp, "%d", &count);
+            pclose(fp);
+            if (count > 0) return 0;
+        }
+    }
     
     return -1;
 }
@@ -745,19 +609,13 @@ int apkm_install(const char* source) {
     
     printf("[APKM] Installing %s %s (%s)\n", name, version, arch);
     
-    // Vérifier si la base de données est à jour
-    struct stat st;
-    char db_path[512];
-    snprintf(db_path, sizeof(db_path), "%s/packages.db", APKM_DB_PATH);
-    
-    if (stat(db_path, &st) != 0 || time(NULL) - st.st_mtime > 86400) {
-        printf("[APKM] Database is old, syncing...\n");
-        db_sync_from_github();
-    }
+    // Vérifier si la base de données est à jour (simplifié)
+    // Ici on pourrait appeler une fonction de mise à jour depuis Zarch Hub
+    // Pour l'exemple, on laisse tel quel
     
     // Télécharger le package
     char tmp_path[512];
-    snprintf(tmp_path, sizeof(tmp_path), "/tmp/%s-%s.tar.bool", name, version);
+    snprintf(tmp_path, sizeof(tmp_path), "/tmp/%s-%s-%s.%s.tar.bool", name, version, "r0", arch);
     
     if (download_package(name, version, tmp_path) != 0) {
         return -1;
@@ -844,30 +702,21 @@ int apkm_search(const char *pattern, output_format_t format) {
 int apkm_repos(output_format_t format) {
     // Pour l'instant, juste le dépôt par défaut
     if (format == OUTPUT_JSON) {
-        printf("[{\"name\":\"apkm-gest\",\"url\":\"https://github.com/gopu-inc/apkm-gest\",\"type\":\"github\"}]\n");
+        printf("[{\"name\":\"zarch-hub\",\"url\":\"%s\",\"type\":\"zarch\"}]\n", ZARCH_HUB_URL);
     } else {
         printf("\n[APKM] Configured repositories:\n");
         printf("═══════════════════════════════════════════\n");
-        printf(" • apkm-gest (github) - https://github.com/gopu-inc/apkm-gest\n");
+        printf(" • zarch-hub (zarch) - %s\n", ZARCH_HUB_URL);
         printf("═══════════════════════════════════════════\n");
     }
     return 0;
 }
 
 int apkm_update(output_format_t format) {
-    int result = db_sync_from_github();
-    
-    if (format == OUTPUT_JSON) {
-        printf("{\"success\":%s}\n", result == 0 ? "true" : "false");
-    } else {
-        if (result == 0) {
-            printf("[APKM] ✅ Database updated successfully\n");
-        } else {
-            printf("[APKM] ❌ Database update failed\n");
-        }
-    }
-    
-    return result;
+    // À implémenter : synchronisation avec Zarch Hub via l'API
+    // Pour l'instant, on simule
+    printf("[APKM] Update not implemented yet\n");
+    return 0;
 }
 
 // ============================================================================
