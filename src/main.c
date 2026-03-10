@@ -138,7 +138,7 @@ void print_info(const char *format, ...) {
     
     va_list args;
     va_start(args, format);
-    printf("ℹ️  ");
+    printf("[!]  ");
     vprintf(format, args);
     printf("\n");
     va_end(args);
@@ -149,7 +149,7 @@ void print_success(const char *format, ...) {
     
     va_list args;
     va_start(args, format);
-    printf("✅ ");
+    printf("[V] ");
     vprintf(format, args);
     printf("\n");
     va_end(args);
@@ -158,7 +158,7 @@ void print_success(const char *format, ...) {
 void print_error(const char *format, ...) {
     va_list args;
     va_start(args, format);
-    fprintf(stderr, "❌ ");
+    fprintf(stderr, "[X] ");
     vfprintf(stderr, format, args);
     fprintf(stderr, "\n");
     va_end(args);
@@ -297,7 +297,6 @@ int parse_manifest(const char *path, manifest_t *manifest) {
 // ============================================================================
 // RECHERCHE MULTI-REPOS
 // ============================================================================
-
 int search_package(const char *name, package_info_t *info) {
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
@@ -316,43 +315,58 @@ int search_package(const char *name, package_info_t *info) {
         print_progress("🔍 Searching %s...", repositories[i].name);
         
         char url[512];
-        // Dans src/main.c, modifier la partie PyPI de search_package :
-
-if (strcmp(repositories[i].type, "pypi") == 0) {
-    struct json_object *info_obj;
-    if (json_object_object_get_ex(parsed, "info", &info_obj)) {
-        struct json_object *tmp;
+        if (strcmp(repositories[i].type, "pypi") == 0) {
+            snprintf(url, sizeof(url), "%s/%s/json", repositories[i].url, name);
+        } else {
+            snprintf(url, sizeof(url), "%s/package/%s", repositories[i].url, name);
+        }
         
-        // Version avec valeurs par défaut
-        strcpy(info->version, "0.0.0");
-        strcpy(info->author, "Unknown");
-        strcpy(info->description, "");
-        strcpy(info->license, "Unknown");
+        struct curl_response resp = {0};
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         
-        if (json_object_object_get_ex(info_obj, "version", &tmp) && tmp)
-            strcpy(info->version, json_object_get_string(tmp));
-        if (json_object_object_get_ex(info_obj, "author", &tmp) && tmp)
-            strcpy(info->author, json_object_get_string(tmp));
-        if (json_object_object_get_ex(info_obj, "author_email", &tmp) && tmp)
-            snprintf(info->author, sizeof(info->author), "%s", json_object_get_string(tmp));
-        if (json_object_object_get_ex(info_obj, "description", &tmp) && tmp)
-            strcpy(info->description, json_object_get_string(tmp));
-        if (json_object_object_get_ex(info_obj, "license", &tmp) && tmp)
-            strcpy(info->license, json_object_get_string(tmp));
+        CURLcode res = curl_easy_perform(curl);
         
-        // Pour PyPI, on utilise des valeurs par défaut pour release/arch
-        strcpy(info->release, "pypi");
-        strcpy(info->arch, "noarch");
-        strcpy(info->repository, repositories[i].name);
-        
-        // Construire l'URL (simplifiée pour PyPI)
-        snprintf(info->url, sizeof(info->url), 
-                "https://pypi.org/pypi/%s/json", info->name);
-        
-        found = 0;
-        print_success("Found in %s", repositories[i].name);
-    }
-}
+        if (res == CURLE_OK && resp.data) {
+            struct json_object *parsed = json_tokener_parse(resp.data);
+            if (parsed) {
+                if (strcmp(repositories[i].type, "pypi") == 0) {
+                    struct json_object *info_obj;
+                    if (json_object_object_get_ex(parsed, "info", &info_obj)) {
+                        struct json_object *tmp;
+                        
+                        // Version avec valeurs par défaut
+                        strcpy(info->version, "0.0.0");
+                        strcpy(info->author, "Unknown");
+                        strcpy(info->description, "");
+                        strcpy(info->license, "Unknown");
+                        
+                        if (json_object_object_get_ex(info_obj, "version", &tmp) && tmp)
+                            strcpy(info->version, json_object_get_string(tmp));
+                        if (json_object_object_get_ex(info_obj, "author", &tmp) && tmp)
+                            strcpy(info->author, json_object_get_string(tmp));
+                        if (json_object_object_get_ex(info_obj, "author_email", &tmp) && tmp)
+                            snprintf(info->author, sizeof(info->author), "%s", json_object_get_string(tmp));
+                        if (json_object_object_get_ex(info_obj, "description", &tmp) && tmp)
+                            strcpy(info->description, json_object_get_string(tmp));
+                        if (json_object_object_get_ex(info_obj, "license", &tmp) && tmp)
+                            strcpy(info->license, json_object_get_string(tmp));
+                        
+                        // Pour PyPI, on utilise des valeurs par défaut pour release/arch
+                        strcpy(info->release, "pypi");
+                        strcpy(info->arch, "noarch");
+                        strcpy(info->repository, repositories[i].name);
+                        
+                        // Construire l'URL (simplifiée pour PyPI)
+                        snprintf(info->url, sizeof(info->url), 
+                                "https://pypi.org/pypi/%s/json", info->name);
+                        
+                        found = 0;
+                        print_success("Found in %s", repositories[i].name);
+                    }
                 } else {
                     struct json_object *package_obj;
                     if (json_object_object_get_ex(parsed, "package", &package_obj)) {
