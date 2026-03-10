@@ -28,6 +28,8 @@ static int debug_mode = 0;
 static int quiet_mode = 0;
 static int interactive = 1;
 static sqlite3 *global_db = NULL;
+// Prototypes des fonctions
+int install_local_package(const char *path);
 
 typedef struct {
     char name[128];
