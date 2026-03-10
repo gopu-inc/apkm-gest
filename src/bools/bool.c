@@ -91,27 +91,23 @@ int main(int argc, char *argv[]) {
     }
     
     int result = 0;
-    
     if (compress) {
-        printf("📦 Compressing: %s\n", input);
-        if (!output) {
-            output = malloc(strlen(input) + 16);
-            sprintf(output, "%s.selp.bool", input);
-        }
-        // result = selp_compress(input, output, level, encrypt);
-        printf("Compression coming soon...\n");
+    printf("📦 Compressing: %s\n", input);
+    if (!output) {
+        output = malloc(strlen(input) + 16);
+        sprintf(output, "%s.selp.bool", input);
     }
-    else if (extract) {
-        printf("📂 Extracting: %s\n", input);
-        if (!output) output = "extracted";
-        // result = selp_decompress(input, output);
-        printf("Extraction coming soon...\n");
-    }
-    else if (verify) {
-        printf("🔐 Verifying: %s\n", input);
-        // result = selp_verify(input);
-        printf("Verification coming soon...\n");
-    }
+    result = selp_compress(input, output, level, encrypt);
+}
+else if (extract) {
+    printf("📂 Extracting: %s\n", input);
+    if (!output) output = "extracted";
+    result = selp_decompress(input, output);
+}
+else if (verify) {
+    printf("🔐 Verifying: %s\n", input);
+    result = selp_verify(input);
+}
     else if (info) {
         printf("ℹ️  Info: %s\n", input);
         // Afficher les infos de l'archive
