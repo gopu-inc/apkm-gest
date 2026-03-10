@@ -76,6 +76,18 @@ void print_spinner(int phase) {
     fflush(stdout);
 }
 
+void print_warning(const char *format, ...) {
+    if (quiet_mode) return;
+    
+    va_list args;
+    va_start(args, format);
+    printf("\033[33m⚠️  \033[0m");  // Jaune
+    vprintf(format, args);
+    printf("\n");
+    va_end(args);
+    fflush(stdout);
+}
+
 void print_progress(const char *format, ...) {
     if (quiet_mode) return;
     
