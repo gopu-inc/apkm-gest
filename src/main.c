@@ -316,45 +316,43 @@ int search_package(const char *name, package_info_t *info) {
         print_progress("🔍 Searching %s...", repositories[i].name);
         
         char url[512];
-        if (strcmp(repositories[i].type, "pypi") == 0) {
-            snprintf(url, sizeof(url), "%s/%s/json", repositories[i].url, name);
-        } else {
-            snprintf(url, sizeof(url), "%s/package/%s", repositories[i].url, name);
-        }
+        // Dans src/main.c, modifier la partie PyPI de search_package :
+
+if (strcmp(repositories[i].type, "pypi") == 0) {
+    struct json_object *info_obj;
+    if (json_object_object_get_ex(parsed, "info", &info_obj)) {
+        struct json_object *tmp;
         
-        struct curl_response resp = {0};  // Initialisé à 0
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        // Version avec valeurs par défaut
+        strcpy(info->version, "0.0.0");
+        strcpy(info->author, "Unknown");
+        strcpy(info->description, "");
+        strcpy(info->license, "Unknown");
         
-        CURLcode res = curl_easy_perform(curl);
+        if (json_object_object_get_ex(info_obj, "version", &tmp) && tmp)
+            strcpy(info->version, json_object_get_string(tmp));
+        if (json_object_object_get_ex(info_obj, "author", &tmp) && tmp)
+            strcpy(info->author, json_object_get_string(tmp));
+        if (json_object_object_get_ex(info_obj, "author_email", &tmp) && tmp)
+            snprintf(info->author, sizeof(info->author), "%s", json_object_get_string(tmp));
+        if (json_object_object_get_ex(info_obj, "description", &tmp) && tmp)
+            strcpy(info->description, json_object_get_string(tmp));
+        if (json_object_object_get_ex(info_obj, "license", &tmp) && tmp)
+            strcpy(info->license, json_object_get_string(tmp));
         
-        if (res == CURLE_OK && resp.data) {
-            struct json_object *parsed = json_tokener_parse(resp.data);
-            if (parsed) {
-                if (strcmp(repositories[i].type, "pypi") == 0) {
-                    struct json_object *info_obj;
-                    if (json_object_object_get_ex(parsed, "info", &info_obj)) {
-                        struct json_object *tmp;
-                        
-                        // Récupérer les infos avec vérification
-                        if (json_object_object_get_ex(info_obj, "version", &tmp) && tmp)
-                            strcpy(info->version, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(info_obj, "author", &tmp) && tmp)
-                            strcpy(info->author, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(info_obj, "author_email", &tmp) && tmp)
-                            strcpy(info->author, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(info_obj, "description", &tmp) && tmp)
-                            strcpy(info->description, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(info_obj, "license", &tmp) && tmp)
-                            strcpy(info->license, json_object_get_string(tmp));
-                        
-                        strcpy(info->repository, repositories[i].name);
-                        found = 0;
-                        print_success("Found in %s", repositories[i].name);
-                    }
+        // Pour PyPI, on utilise des valeurs par défaut pour release/arch
+        strcpy(info->release, "pypi");
+        strcpy(info->arch, "noarch");
+        strcpy(info->repository, repositories[i].name);
+        
+        // Construire l'URL (simplifiée pour PyPI)
+        snprintf(info->url, sizeof(info->url), 
+                "https://pypi.org/pypi/%s/json", info->name);
+        
+        found = 0;
+        print_success("Found in %s", repositories[i].name);
+    }
+}
                 } else {
                     struct json_object *package_obj;
                     if (json_object_object_get_ex(parsed, "package", &package_obj)) {
@@ -406,7 +404,6 @@ int search_package(const char *name, package_info_t *info) {
 // ============================================================================
 // TÉLÉCHARGEMENT AVEC ANIMATION
 // ============================================================================
-
 int download_package(package_info_t *info, const char *output_path) {
     if (!info || !info->url || strlen(info->url) == 0) {
         print_error("Invalid package URL");
@@ -422,6 +419,8 @@ int download_package(package_info_t *info, const char *output_path) {
         return -1;
     }
     
+    print_step("Downloading");
+    
     curl_easy_setopt(curl, CURLOPT_URL, info->url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
@@ -430,7 +429,6 @@ int download_package(package_info_t *info, const char *output_path) {
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "APKM/2.0");
     
-    printf("\n");
     CURLcode res = curl_easy_perform(curl);
     fclose(fp);
     
@@ -439,88 +437,63 @@ int download_package(package_info_t *info, const char *output_path) {
     curl_easy_cleanup(curl);
     
     if (res != CURLE_OK || http_code != 200) {
+        print_error("Download failed (HTTP %ld)", http_code);
         unlink(output_path);
         return -1;
     }
     
+    // Vérifier que le fichier n'est pas vide
+    struct stat st;
+    if (stat(output_path, &st) != 0 || st.st_size == 0) {
+        print_error("Downloaded file is empty");
+        unlink(output_path);
+        return -1;
+    }
+    
+    print_success("Download complete (%.2f KB)", st.st_size / 1024.0);
     return 0;
 }
+
 // ============================================================================
 // INSTALLATION
 // ============================================================================
-int install_local_package(const char *path) {
-    print_step("Installing local package");
+int install_package(const char *name, const char *version_specific) {
+    // Si c'est un chemin local
+    if (access(name, F_OK) == 0 && (strstr(name, ".tar.bool") || strstr(name, ".selp.bool"))) {
+        return install_local_package(name);
+    }
     
-    // Vérifier que le fichier existe
-    if (access(path, F_OK) != 0) {
-        print_error("File not found: %s", path);
+    package_info_t info;
+    memset(&info, 0, sizeof(info));
+    strcpy(info->name, name);
+    
+    print_step("Searching for %s", name);
+    
+    if (search_package(name, &info) != 0) {
+        print_error("Package '%s' not found", name);
         return -1;
     }
     
-    // Vérifier l'extension
-    if (!strstr(path, ".tar.bool") && !strstr(path, ".selp.bool")) {
-        print_error("Not a valid package archive");
+    print_success("Found %s version %s-%s", name, info.version, info.release);
+    print_info("  Repository: %s", info.repository);
+    print_info("  Author: %s", info.author);
+    print_info("  Downloads: %d", info.downloads);
+    print_info("  Size: %.1f KB", info.size / 1024.0);
+    
+    // Construire le chemin temporaire
+    char tmp_path[512];
+    if (strcmp(info.repository, "pypi") == 0) {
+        snprintf(tmp_path, sizeof(tmp_path), "/tmp/%s-%s.tar.bool", name, info.version);
+    } else {
+        snprintf(tmp_path, sizeof(tmp_path), "/tmp/%s-%s-%s.%s.tar.bool", 
+                 name, info.version, info.release, info.arch);
+    }
+    
+    if (download_package(&info, tmp_path) != 0) {
         return -1;
     }
     
-    char extract_dir[512];
-    snprintf(extract_dir, sizeof(extract_dir), "/tmp/apkm_extract_%d", getpid());
-    mkdir(extract_dir, 0755);
-    
-    // Extraire avec bool
-    print_step("Extracting package");
-    fflush(stdout);
-    
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "bool -x '%s' '%s' 2>/dev/null", path, extract_dir);
-    
-    if (system(cmd) != 0) {
-        print_error("Extraction failed");
-        rmdir(extract_dir);
-        return -1;
-    }
-    
-    // Chercher manifest.toml
-    char manifest_path[512];
-    snprintf(manifest_path, sizeof(manifest_path), "%s/manifest.toml", extract_dir);
-    
-    if (access(manifest_path, F_OK) == 0) {
-        print_info("Found manifest.toml");
-    }
-    
-    // Chercher install.sh
-    char install_script[512];
-    snprintf(install_script, sizeof(install_script), "%s/install.sh", extract_dir);
-    
-    if (access(install_script, F_OK) == 0) {
-        print_step("Running install script");
-        chmod(install_script, 0755);
-        
-        char current_dir[1024];
-        getcwd(current_dir, sizeof(current_dir));
-        chdir(extract_dir);
-        
-        int ret = system("./install.sh");
-        chdir(current_dir);
-        
-        if (ret != 0) {
-            print_warning("Install script failed");
-        }
-    }
-    
-    // Copier les binaires
-    print_step("Installing binaries");
-    snprintf(cmd, sizeof(cmd), 
-             "find '%s' -type f -executable -exec cp {} /usr/local/bin/ \\; 2>/dev/null", 
-             extract_dir);
-    system(cmd);
-    
-    // Nettoyer
-    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", extract_dir);
-    system(cmd);
-    
-    print_success("Package installed successfully");
-    return 0;
+    return install_local_package(tmp_path);
 }
 
 int install_package(const char *name, const char *version_specific) {
