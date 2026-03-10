@@ -304,6 +304,12 @@ int search_package(const char *name, package_info_t *info) {
     
     int found = -1;
     
+    // Initialiser info avec des valeurs par défaut
+    memset(info, 0, sizeof(package_info_t));
+    strcpy(info->name, name);
+    strcpy(info->release, "r0");
+    strcpy(info->arch, "x86_64");
+    
     for (int i = 0; i < repo_count && found != 0; i++) {
         if (!repositories[i].enabled) continue;
         
@@ -316,11 +322,12 @@ int search_package(const char *name, package_info_t *info) {
             snprintf(url, sizeof(url), "%s/package/%s", repositories[i].url, name);
         }
         
-        struct curl_response resp = {0};
+        struct curl_response resp = {0};  // Initialisé à 0
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         
         CURLcode res = curl_easy_perform(curl);
         
@@ -331,18 +338,20 @@ int search_package(const char *name, package_info_t *info) {
                     struct json_object *info_obj;
                     if (json_object_object_get_ex(parsed, "info", &info_obj)) {
                         struct json_object *tmp;
-                        strcpy(info->name, name);
-                        strcpy(info->repository, repositories[i].name);
                         
-                        if (json_object_object_get_ex(info_obj, "version", &tmp))
+                        // Récupérer les infos avec vérification
+                        if (json_object_object_get_ex(info_obj, "version", &tmp) && tmp)
                             strcpy(info->version, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(info_obj, "author", &tmp))
+                        if (json_object_object_get_ex(info_obj, "author", &tmp) && tmp)
                             strcpy(info->author, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(info_obj, "description", &tmp))
+                        if (json_object_object_get_ex(info_obj, "author_email", &tmp) && tmp)
+                            strcpy(info->author, json_object_get_string(tmp));
+                        if (json_object_object_get_ex(info_obj, "description", &tmp) && tmp)
                             strcpy(info->description, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(info_obj, "license", &tmp))
+                        if (json_object_object_get_ex(info_obj, "license", &tmp) && tmp)
                             strcpy(info->license, json_object_get_string(tmp));
                         
+                        strcpy(info->repository, repositories[i].name);
                         found = 0;
                         print_success("Found in %s", repositories[i].name);
                     }
@@ -350,30 +359,29 @@ int search_package(const char *name, package_info_t *info) {
                     struct json_object *package_obj;
                     if (json_object_object_get_ex(parsed, "package", &package_obj)) {
                         struct json_object *tmp;
-                        strcpy(info->name, name);
-                        strcpy(info->repository, repositories[i].name);
                         
-                        if (json_object_object_get_ex(package_obj, "version", &tmp))
+                        if (json_object_object_get_ex(package_obj, "version", &tmp) && tmp)
                             strcpy(info->version, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(package_obj, "release", &tmp))
+                        if (json_object_object_get_ex(package_obj, "release", &tmp) && tmp)
                             strcpy(info->release, json_object_get_string(tmp));
-                        else
-                            strcpy(info->release, "r0");
-                        if (json_object_object_get_ex(package_obj, "arch", &tmp))
+                        if (json_object_object_get_ex(package_obj, "arch", &tmp) && tmp)
                             strcpy(info->arch, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(package_obj, "author", &tmp))
+                        if (json_object_object_get_ex(package_obj, "author", &tmp) && tmp)
                             strcpy(info->author, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(package_obj, "description", &tmp))
+                        if (json_object_object_get_ex(package_obj, "description", &tmp) && tmp)
                             strcpy(info->description, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(package_obj, "license", &tmp))
+                        if (json_object_object_get_ex(package_obj, "license", &tmp) && tmp)
                             strcpy(info->license, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(package_obj, "sha256", &tmp))
+                        if (json_object_object_get_ex(package_obj, "sha256", &tmp) && tmp)
                             strcpy(info->sha256, json_object_get_string(tmp));
-                        if (json_object_object_get_ex(package_obj, "size", &tmp))
+                        if (json_object_object_get_ex(package_obj, "size", &tmp) && tmp)
                             info->size = json_object_get_int(tmp);
-                        if (json_object_object_get_ex(package_obj, "downloads", &tmp))
+                        if (json_object_object_get_ex(package_obj, "downloads", &tmp) && tmp)
                             info->downloads = json_object_get_int(tmp);
                         
+                        strcpy(info->repository, repositories[i].name);
+                        
+                        // Construire l'URL de téléchargement
                         snprintf(info->url, sizeof(info->url),
                                 "%s/download/public/%s/%s/%s/%s",
                                 repositories[i].url, name, info->version, 
@@ -391,6 +399,7 @@ int search_package(const char *name, package_info_t *info) {
     
     curl_easy_cleanup(curl);
     printf("\n");  // Nouvelle ligne après le spinner
+    
     return found;
 }
 
