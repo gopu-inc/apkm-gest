@@ -471,44 +471,6 @@ int download_package(package_info_t *info, const char *output_path) {
 // ============================================================================
 // INSTALLATION
 // ============================================================================
-int install_package(const char *name, const char *version_specific) {
-    // Si c'est un chemin local
-    if (access(name, F_OK) == 0 && (strstr(name, ".tar.bool") || strstr(name, ".selp.bool"))) {
-        return install_local_package(name);
-    }
-    
-    package_info_t info;
-    memset(&info, 0, sizeof(info));
-    strcpy(info->name, name);
-    
-    print_step("Searching for %s", name);
-    
-    if (search_package(name, &info) != 0) {
-        print_error("Package '%s' not found", name);
-        return -1;
-    }
-    
-    print_success("Found %s version %s-%s", name, info.version, info.release);
-    print_info("  Repository: %s", info.repository);
-    print_info("  Author: %s", info.author);
-    print_info("  Downloads: %d", info.downloads);
-    print_info("  Size: %.1f KB", info.size / 1024.0);
-    
-    // Construire le chemin temporaire
-    char tmp_path[512];
-    if (strcmp(info.repository, "pypi") == 0) {
-        snprintf(tmp_path, sizeof(tmp_path), "/tmp/%s-%s.tar.bool", name, info.version);
-    } else {
-        snprintf(tmp_path, sizeof(tmp_path), "/tmp/%s-%s-%s.%s.tar.bool", 
-                 name, info.version, info.release, info.arch);
-    }
-    
-    if (download_package(&info, tmp_path) != 0) {
-        return -1;
-    }
-    
-    return install_local_package(tmp_path);
-}
 
 int install_package(const char *name, const char *version_specific) {
     // Si c'est un chemin local
