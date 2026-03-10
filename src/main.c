@@ -62,13 +62,104 @@ typedef struct {
     int dep_count;
 } manifest_t;
 
-#define MAX_REPOS 32
+#define MAX_REPOS 512
 static repository_t repositories[MAX_REPOS];
 static int repo_count = 0;
 
 // ============================================================================
 // ANIMATIONS
 // ============================================================================
+// ============================================================================
+// INSTALLATION LOCALE
+// ============================================================================
+
+int install_local_package(const char *path) {
+    print_step("Installing local package");
+    
+    // Vérifier que le fichier existe
+    if (access(path, F_OK) != 0) {
+        print_error("File not found: %s", path);
+        return -1;
+    }
+    
+    // Vérifier l'extension
+    if (!strstr(path, ".tar.bool") && !strstr(path, ".selp.bool")) {
+        print_error("Not a valid package archive (must be .tar.bool or .selp.bool)");
+        return -1;
+    }
+    
+    char extract_dir[512];
+    snprintf(extract_dir, sizeof(extract_dir), "/tmp/apkm_extract_%d", getpid());
+    mkdir(extract_dir, 0755);
+    
+    // Extraire avec bool
+    print_step("Extracting package");
+    fflush(stdout);
+    
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "bool -x '%s' '%s' 2>/dev/null", path, extract_dir);
+    
+    if (system(cmd) != 0) {
+        print_error("Extraction failed");
+        rmdir(extract_dir);
+        return -1;
+    }
+    
+    // Chercher manifest.toml
+    char manifest_path[512];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/manifest.toml", extract_dir);
+    
+    if (access(manifest_path, F_OK) == 0) {
+        print_info("Found manifest.toml");
+        // Ici on pourrait parser le manifest
+    }
+    
+    // Chercher install.sh
+    char install_script[512];
+    snprintf(install_script, sizeof(install_script), "%s/install.sh", extract_dir);
+    
+    if (access(install_script, F_OK) == 0) {
+        print_step("Running install script");
+        chmod(install_script, 0755);
+        
+        char current_dir[1024];
+        getcwd(current_dir, sizeof(current_dir));
+        chdir(extract_dir);
+        
+        int ret = system("./install.sh");
+        chdir(current_dir);
+        
+        if (ret != 0) {
+            print_warning("Install script failed (exit code %d)", ret);
+        } else {
+            print_success("Install script executed");
+        }
+    }
+    
+    // Copier les binaires
+    print_step("Installing binaries");
+    snprintf(cmd, sizeof(cmd), 
+             "find '%s' -type f -executable -exec cp {} /usr/local/bin/ \\; 2>/dev/null", 
+             extract_dir);
+    system(cmd);
+    
+    // Compter les fichiers installés
+    snprintf(cmd, sizeof(cmd), "ls -1 /usr/local/bin/ | wc -l");
+    FILE *fp = popen(cmd, "r");
+    if (fp) {
+        int count = 0;
+        fscanf(fp, "%d", &count);
+        pclose(fp);
+        print_info("Binaries installed: %d", count);
+    }
+    
+    // Nettoyer
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", extract_dir);
+    system(cmd);
+    
+    print_success("Package installed successfully");
+    return 0;
+}
 
 void print_spinner(int phase) {
     const char *spinner = "|/-\\";
