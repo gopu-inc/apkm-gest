@@ -408,6 +408,11 @@ int search_package(const char *name, package_info_t *info) {
 // ============================================================================
 
 int download_package(package_info_t *info, const char *output_path) {
+    if (!info || !info->url || strlen(info->url) == 0) {
+        print_error("Invalid package URL");
+        return -1;
+    }
+    
     CURL *curl = curl_easy_init();
     if (!curl) return -1;
     
@@ -422,35 +427,39 @@ int download_package(package_info_t *info, const char *output_path) {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "APKM/2.0");
     
     printf("\n");
     CURLcode res = curl_easy_perform(curl);
     fclose(fp);
     
-    if (res != CURLE_OK) {
-        unlink(output_path);
-        curl_easy_cleanup(curl);
-        return -1;
-    }
-    
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(curl);
     
-    return (http_code == 200) ? 0 : -1;
+    if (res != CURLE_OK || http_code != 200) {
+        unlink(output_path);
+        return -1;
+    }
+    
+    return 0;
 }
-
 // ============================================================================
 // INSTALLATION
 // ============================================================================
-
 int install_local_package(const char *path) {
     print_step("Installing local package");
     
+    // Vérifier que le fichier existe
+    if (access(path, F_OK) != 0) {
+        print_error("File not found: %s", path);
+        return -1;
+    }
+    
     // Vérifier l'extension
-    if (!strstr(path, ".tar.bool")) {
-        print_error("Not a .tar.bool package");
+    if (!strstr(path, ".tar.bool") && !strstr(path, ".selp.bool")) {
+        print_error("Not a valid package archive");
         return -1;
     }
     
@@ -467,6 +476,7 @@ int install_local_package(const char *path) {
     
     if (system(cmd) != 0) {
         print_error("Extraction failed");
+        rmdir(extract_dir);
         return -1;
     }
     
@@ -476,14 +486,6 @@ int install_local_package(const char *path) {
     
     if (access(manifest_path, F_OK) == 0) {
         print_info("Found manifest.toml");
-        
-        manifest_t manifest;
-        memset(&manifest, 0, sizeof(manifest));
-        parse_manifest(manifest_path, &manifest);
-        
-        if (strlen(manifest.name) > 0) {
-            print_info("Package: %s %s-%s", manifest.name, manifest.version, manifest.release);
-        }
     }
     
     // Chercher install.sh
