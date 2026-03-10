@@ -1,3 +1,4 @@
+#include <openssl/sha.h>
 #include "bool.h"
 #include <zlib.h>
 #include <stdio.h>
