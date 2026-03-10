@@ -131,6 +131,7 @@ set(BOOL_SOURCES
     src/bools/selp_directory.c
     src/bools/selp_multi.c
     src/bools/selp_list.c
+    src/bools/selp_info.c
 )
 
 # ============================================================================
