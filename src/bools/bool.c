@@ -29,6 +29,7 @@ void print_help() {
     printf("  -v, --verify        Verify archive signature\n");
     printf("  -i, --info          Show archive information\n");
     printf("  -h, --help          Show this help\n\n");
+    printf("  -m, --magic          Show SELP magic information\n");
     printf("Examples:\n");
     printf("  bool -c myfolder                  # Create myfolder.selp.bool\n");
     printf("  bool -c -l3 -e3 myfolder           # Ultra compression + strong encryption\n");
@@ -61,6 +62,7 @@ int main(int argc, char *argv[]) {
         {"verify", no_argument, 0, 'v'},
         {"info", no_argument, 0, 'i'},
         {"help", no_argument, 0, 'h'},
+        {"magic", no_argument, 0, 'm'},
         {0, 0, 0, 0}
     };
     
@@ -68,6 +70,7 @@ int main(int argc, char *argv[]) {
     while ((opt = getopt_long(argc, argv, "cxl:e:vih", long_options, NULL)) != -1) {
         switch (opt) {
             case 'c': compress = 1; break;
+            case 'm': selp_magic_info(input); return 0;
             case 'x': extract = 1; break;
             case 'l': level = atoi(optarg); break;
             case 'e': encrypt = atoi(optarg); break;
