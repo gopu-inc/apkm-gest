@@ -1,7 +1,39 @@
 #include "bool.h"
 #include <dirent.h>
+#include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 
+// Fonction pour que 'file' reconnaisse le format SELP
+void selp_magic_info(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return;
+    
+    selp_header_t header;
+    if (fread(&header, sizeof(header), 1, fp) != 1) {
+        fclose(fp);
+        return;
+    }
+    fclose(fp);
+    
+    if (memcmp(header.magic, "SELP", 4) != 0) return;
+    
+    printf("SELP PASSIB LAB SOCKET 2001x006\n");
+    printf("Version: %d\n", header.version);
+    printf("Compression: %s\n", 
+           header.compression == 0 ? "none" :
+           header.compression == 1 ? "fast" :
+           header.compression == 2 ? "best" : "ultra");
+    printf("Encryption: %s\n",
+           header.encryption == 0 ? "none" :
+           header.encryption == 1 ? "light" :
+           header.encryption == 2 ? "medium" : "strong");
+    printf("Original: %llu bytes\n", (unsigned long long)header.original_size);
+    printf("Compressed: %llu bytes\n", (unsigned long long)header.compressed_size);
+    printf("Ratio: %.1f%%\n", 100.0 * header.compressed_size / header.original_size);
+    printf("Files: %llu\n", (unsigned long long)header.file_count);
+    printf("Comment: %s\n", header.comment);
+}
 // Ajouter un fichier à l'archive
 static int add_file_to_archive(selp_ctx_t *ctx, const char *path) {
     FILE *f = fopen(path, "rb");
