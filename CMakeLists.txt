@@ -8,9 +8,17 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Chemins absolus
+set(SOURCE_DIR ${CMAKE_SOURCE_DIR}/..)
+set(INCLUDE_DIR ${SOURCE_DIR}/include)
+set(SRC_DIR ${SOURCE_DIR}/src)
+
 # Include directories - IMPORTANT !
-include_directories(${CMAKE_SOURCE_DIR}/../include)
-include_directories(${CMAKE_SOURCE_DIR}/../src)
+include_directories(${INCLUDE_DIR})
+include_directories(${SRC_DIR})
+
+message(STATUS "Source dir: ${SOURCE_DIR}")
+message(STATUS "Include dir: ${INCLUDE_DIR}")
 
 # ============================================================================
 # RECHERCHE BIBLIOTHÈQUES
@@ -25,41 +33,46 @@ find_package(Threads REQUIRED)
 # SOURCES APKM
 # ============================================================================
 set(APKM_SOURCES
-    ../src/main.c
-    ../src/core.c
-    ../src/download.c
-    ../src/auth.c
-    ../src/crypto.c
-    ../src/db.c
-    ../src/parser.c
-    ../src/resolver.c
-    ../src/sandbox.c
-    ../src/security.c
-    ../src/zarch.c
-    ../src/utils.c
+    ${SRC_DIR}/main.c
+    ${SRC_DIR}/core.c
+    ${SRC_DIR}/download.c
+    ${SRC_DIR}/auth.c
+    ${SRC_DIR}/crypto.c
+    ${SRC_DIR}/db.c
+    ${SRC_DIR}/parser.c
+    ${SRC_DIR}/resolver.c
+    ${SRC_DIR}/sandbox.c
+    ${SRC_DIR}/security.c
+    ${SRC_DIR}/zarch.c
+    ${SRC_DIR}/utils.c
 )
 
 # ============================================================================
 # SOURCES APSM
 # ============================================================================
 set(APSM_SOURCES
-    ../src/aps/apsm.c
-    ../src/aps/auth.c
-    ../src/aps/security.c
-    ../src/aps/publish.c
-    ../src/aps/token.c
+    ${SRC_DIR}/aps/apsm.c
+    ${SRC_DIR}/aps/auth.c
+    ${SRC_DIR}/aps/security.c
 )
 
 # ============================================================================
 # SOURCES BOOL
 # ============================================================================
 set(BOOL_SOURCES
-    ../src/bools/bool.c
-    ../src/bools/selp_compress.c
-    ../src/bools/selp_decompress.c
-    ../src/bools/selp_crypto.c
-    ../src/bools/selp_archive.c
+    ${SRC_DIR}/bools/bool.c
+    ${SRC_DIR}/bools/selp_compress.c
+    ${SRC_DIR}/bools/selp_decompress.c
+    ${SRC_DIR}/bools/selp_crypto.c
+    ${SRC_DIR}/bools/selp_archive.c
 )
+
+# Vérifier que les fichiers existent
+foreach(src ${APKM_SOURCES})
+    if(NOT EXISTS ${src})
+        message(WARNING "Missing: ${src}")
+    endif()
+endforeach()
 
 # ============================================================================
 # BINAIRES
