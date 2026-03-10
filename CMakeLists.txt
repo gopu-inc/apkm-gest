@@ -8,17 +8,18 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# Chemins absolus
-set(SOURCE_DIR ${CMAKE_SOURCE_DIR}/..)
-set(INCLUDE_DIR ${SOURCE_DIR}/include)
-set(SRC_DIR ${SOURCE_DIR}/src)
+# Chemins absolus (CORRIGÉS)
+set(PROJECT_ROOT ${CMAKE_SOURCE_DIR})
+set(INCLUDE_DIR ${PROJECT_ROOT}/include)
+set(SRC_DIR ${PROJECT_ROOT}/src)
 
-# Include directories - IMPORTANT !
+message(STATUS "Project root: ${PROJECT_ROOT}")
+message(STATUS "Include dir: ${INCLUDE_DIR}")
+message(STATUS "Source dir: ${SRC_DIR}")
+
+# Include directories
 include_directories(${INCLUDE_DIR})
 include_directories(${SRC_DIR})
-
-message(STATUS "Source dir: ${SOURCE_DIR}")
-message(STATUS "Include dir: ${INCLUDE_DIR}")
 
 # ============================================================================
 # RECHERCHE BIBLIOTHÈQUES
@@ -70,7 +71,19 @@ set(BOOL_SOURCES
 # Vérifier que les fichiers existent
 foreach(src ${APKM_SOURCES})
     if(NOT EXISTS ${src})
-        message(WARNING "Missing: ${src}")
+        message(WARNING "APKM source missing: ${src}")
+    endif()
+endforeach()
+
+foreach(src ${APSM_SOURCES})
+    if(NOT EXISTS ${src})
+        message(WARNING "APSM source missing: ${src}")
+    endif()
+endforeach()
+
+foreach(src ${BOOL_SOURCES})
+    if(NOT EXISTS ${src})
+        message(WARNING "BOOL source missing: ${src}")
     endif()
 endforeach()
 
@@ -109,6 +122,7 @@ target_link_libraries(bool
 enable_testing()
 add_test(NAME apkm_version COMMAND apkm --version)
 add_test(NAME apkm_help COMMAND apkm --help)
+add_test(NAME apsm_help COMMAND apsm help)
 add_test(NAME bool_version COMMAND bool --version)
 
 message(STATUS "✅ Configuration réussie!")
