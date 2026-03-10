@@ -128,6 +128,9 @@ set(BOOL_SOURCES
     src/bools/selp_crypto.c
     src/bools/selp_archive.c
     src/bools/selp_verify.c
+    src/bools/selp_directory.c
+    src/bools/selp_multi.c
+    src/bools/selp_list.c
 )
 
 # ============================================================================
