@@ -2,17 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(apkm VERSION 2.0.0 LANGUAGES C)
 
 # ============================================================================
-# SILENCE ! (supprimer les warnings inutiles)
-# ============================================================================
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
-endif()
-
-set(CMAKE_C_FLAGS_RELEASE "-O3 -flto -DNDEBUG")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")  # Désactive tous les warnings
-
-# ============================================================================
-# CONFIGURATION DE BASE
+# CONFIGURATION GLOBALE
 # ============================================================================
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -25,36 +15,67 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # ============================================================================
-# FLAGS ULTRA PUISSANTS ⚡
+# FLAGS DE COMPILATION ULTRA-OPTIMISÉS
 # ============================================================================
-# Optimisations agressives
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -funroll-loops -ffast-math -fomit-frame-pointer")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ftree-vectorize -fvect-cost-model=unlimited")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -flto -fwhole-program -fprofile-generate")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -falign-functions=64 -falign-loops=64")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fprefetch-loop-arrays -fgcse-sm -fgcse-las")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-strong -D_FORTIFY_SOURCE=2")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fpie -pie")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")  # Désactive tous les warnings
 
-# Optimisations par architecture
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native -mtune=native -mfpmath=sse")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse4.2 -maes -mpclmul -mavx -mavx2 -mbmi2")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i.86")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=pentium4 -mtune=generic -msse3")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+# Flags de linkage
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-O3 -Wl,--as-needed -Wl,--gc-sections")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-O3 -Wl,--as-needed")
+
+# ============================================================================
+# DÉTECTION ARCHITECTURE
+# ============================================================================
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)")
+    set(APKM_ARCH "x86_64")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -m64 -msse4.2 -maes -mpclmul -mavx -mavx2 -mbmi2")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(i.86|x86)")
+    set(APKM_ARCH "i386")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -m32 -msse2")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)")
+    set(APKM_ARCH "arm64")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8.2-a+crypto+dotprod -mtune=cortex-a76")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
+    set(APKM_ARCH "armv7")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv7-a -mfpu=neon -mfloat-abi=hard")
+else()
+    set(APKM_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
 endif()
 
-# Flags de linkage ultra-optimisés
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-O3 -Wl,--as-needed -Wl,--gc-sections")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,relro -Wl,-z,now")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-O3 -Wl,--as-needed")
+# ============================================================================
+# OPTIONS DE BUILD
+# ============================================================================
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(BUILD_APSM "Build APSM tool" ON)
+option(BUILD_BOOL "Build BOOL tool" ON)
+option(BUILD_TESTS "Build tests" ON)
+option(ENABLE_LTO "Enable Link Time Optimization" ON)
+
+# ============================================================================
+# INCLUDE DIRECTORIES
+# ============================================================================
+include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR}/src)
+include_directories(${CMAKE_BINARY_DIR}/include)
 
 # ============================================================================
 # DÉFINITIONS GLOBALES
 # ============================================================================
-add_definitions(-D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE)
+add_definitions(-D_GNU_SOURCE)
 add_definitions(-DAPKM_VERSION=\"${PROJECT_VERSION}\")
-add_definitions(-DPOSSI99=1 -DULTRA_OPTIMIZED=1)
+add_definitions(-DAPKM_ARCH=\"${APKM_ARCH}\")
+add_definitions(-D_FILE_OFFSET_BITS=64)
+add_definitions(-D_LARGEFILE_SOURCE)
+add_definitions(-D_LARGEFILE64_SOURCE)
+add_definitions(-D_POSIX_C_SOURCE=200809L)
 
 # URLs Zarch Hub
 set(ZARCH_HUB_URL "https://gsql-badge.onrender.com")
@@ -64,12 +85,6 @@ set(ZARCH_PACKAGE_URL "${ZARCH_HUB_URL}/package/download")
 add_definitions(-DZARCH_HUB_URL=\"${ZARCH_HUB_URL}\")
 add_definitions(-DZARCH_API_URL=\"${ZARCH_API_URL}\")
 add_definitions(-DZARCH_PACKAGE_URL=\"${ZARCH_PACKAGE_URL}\")
-
-# ============================================================================
-# INCLUDE DIRECTORIES
-# ============================================================================
-include_directories(${CMAKE_SOURCE_DIR}/include)
-include_directories(${CMAKE_SOURCE_DIR}/src)
 
 # ============================================================================
 # RECHERCHE DES BIBLIOTHÈQUES
@@ -92,10 +107,13 @@ pkg_check_modules(ARGON2 REQUIRED libargon2)
 pkg_check_modules(SECCOMP REQUIRED libseccomp)
 pkg_check_modules(CAP_NG REQUIRED libcap-ng)
 pkg_check_modules(BLAKE3 REQUIRED libblake3)
+pkg_check_modules(TOML REQUIRED toml)
 
 # ============================================================================
 # LISTE DES SOURCES
 # ============================================================================
+
+# Sources communes
 set(CORE_SOURCES
     src/auth.c
     src/crypto.c
@@ -108,6 +126,7 @@ set(CORE_SOURCES
     src/utils.c
 )
 
+# Sources APKM
 set(APKM_SOURCES
     src/main.c
     src/core.c
@@ -115,12 +134,14 @@ set(APKM_SOURCES
     ${CORE_SOURCES}
 )
 
+# Sources APSM
 set(APSM_SOURCES
     src/aps/apsm.c
     src/aps/auth.c
     src/aps/security.c
 )
 
+# Sources BOOL (SELP)
 set(BOOL_SOURCES
     src/bools/bool.c
     src/bools/selp_compress.c
@@ -138,13 +159,22 @@ set(BOOL_SOURCES
 # BIBLIOTHÈQUES STATIQUES
 # ============================================================================
 add_library(apkm_static STATIC ${CORE_SOURCES})
-set_target_properties(apkm_static PROPERTIES OUTPUT_NAME "apkm" PREFIX "lib")
+set_target_properties(apkm_static PROPERTIES 
+    OUTPUT_NAME "apkm" PREFIX "lib"
+    POSITION_INDEPENDENT_CODE ON
+)
 
 add_library(apsm_static STATIC ${APSM_SOURCES})
-set_target_properties(apsm_static PROPERTIES OUTPUT_NAME "apsm" PREFIX "lib")
+set_target_properties(apsm_static PROPERTIES 
+    OUTPUT_NAME "apsm" PREFIX "lib"
+    POSITION_INDEPENDENT_CODE ON
+)
 
 add_library(bool_static STATIC ${BOOL_SOURCES})
-set_target_properties(bool_static PROPERTIES OUTPUT_NAME "bool" PREFIX "lib")
+set_target_properties(bool_static PROPERTIES 
+    OUTPUT_NAME "bool" PREFIX "lib"
+    POSITION_INDEPENDENT_CODE ON
+)
 
 # ============================================================================
 # BIBLIOTHÈQUES PARTAGÉES
@@ -153,18 +183,21 @@ add_library(apkm_shared SHARED ${CORE_SOURCES})
 set_target_properties(apkm_shared PROPERTIES 
     OUTPUT_NAME "apkm" PREFIX "lib"
     VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
+    POSITION_INDEPENDENT_CODE ON
 )
 
 add_library(apsm_shared SHARED ${APSM_SOURCES})
 set_target_properties(apsm_shared PROPERTIES 
     OUTPUT_NAME "apsm" PREFIX "lib"
     VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
+    POSITION_INDEPENDENT_CODE ON
 )
 
 add_library(bool_shared SHARED ${BOOL_SOURCES})
 set_target_properties(bool_shared PROPERTIES 
     OUTPUT_NAME "bool" PREFIX "lib"
     VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
+    POSITION_INDEPENDENT_CODE ON
 )
 
 # ============================================================================
@@ -186,8 +219,10 @@ set_target_properties(bool PROPERTIES OUTPUT_NAME "bool")
 # LINK LIBRARIES (pour tous les targets)
 # ============================================================================
 foreach(target 
-    apkm_static apkm_shared apsm_static apsm_shared 
-    bool_static bool_shared apkm apsm bool
+    apkm_static apkm_shared 
+    apsm_static apsm_shared 
+    bool_static bool_shared
+    apkm apsm bool
 )
     target_link_libraries(${target}
         OpenSSL::Crypto
@@ -205,6 +240,7 @@ foreach(target
         ${SECCOMP_LDFLAGS}
         ${CAP_NG_LDFLAGS}
         ${BLAKE3_LDFLAGS}
+        ${TOML_LDFLAGS}
         Threads::Threads
         rt dl m
     )
@@ -221,6 +257,7 @@ foreach(target
         ${SECCOMP_INCLUDE_DIRS}
         ${CAP_NG_INCLUDE_DIRS}
         ${BLAKE3_INCLUDE_DIRS}
+        ${TOML_INCLUDE_DIRS}
     )
 endforeach()
 
@@ -248,10 +285,11 @@ install(FILES
 )
 
 # ============================================================================
-# TESTS (optionnels)
+# TESTS
 # ============================================================================
 enable_testing()
 add_test(NAME apkm_version COMMAND apkm --version)
+add_test(NAME apkm_help COMMAND apkm --help)
 add_test(NAME bool_help COMMAND bool --help)
 
 # ============================================================================
@@ -261,14 +299,47 @@ set(CPACK_PACKAGE_NAME "apkm")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_VENDOR "Gopu.inc")
 set(CPACK_PACKAGE_CONTACT "ceoseshell@gmail.com")
-set(CPACK_PACKAGE_DESCRIPTION "APKM - Ultra Optimized Package Manager")
+set(CPACK_PACKAGE_DESCRIPTION "APKM - Advanced Package Manager")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/gopu-inc/apkm-gest")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_SOURCE_DIR}/README.md")
+
+# Générateurs
 set(CPACK_GENERATOR TGZ TBZ2 TXZ TZ ZIP DEB RPM)
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6, libcurl4, libssl3, libsqlite3-0")
-set(CPACK_RPM_PACKAGE_REQUIRES "curl, openssl, sqlite")
+
+# Configurations Debian
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6, libcurl4, libssl3, libsqlite3-0, libsodium23, libarchive13, liblz4-1, libzstd1, libyaml-0-2, libjansson4, libargon2-1, libseccomp2, libcap2, zlib1g, libtoml1")
+set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+set(CPACK_DEBIAN_FILE_NAME "apkm-${PROJECT_VERSION}-${APKM_ARCH}.deb")
+
+# Configurations RPM
+set(CPACK_RPM_PACKAGE_REQUIRES "curl, openssl, sqlite, libsodium, libarchive, lz4, zstd, libyaml, jansson, argon2, libseccomp, libcap, zlib, toml")
+set(CPACK_RPM_FILE_NAME "apkm-${PROJECT_VERSION}-${APKM_ARCH}.rpm")
 
 include(CPack)
 
 # ============================================================================
-# MESSAGE UNIQUE DE FIN
+# MESSAGE DE FIN
 # ============================================================================
+message(STATUS "")
+message(STATUS "==================================================")
 message(STATUS "✅ APKM v${PROJECT_VERSION} - Build ultra-optimisé prêt ⚡")
+message(STATUS "==================================================")
+message(STATUS "📦 Architecture: ${APKM_ARCH}")
+message(STATUS "📦 Zarch Hub: ${ZARCH_HUB_URL}")
+message(STATUS "")
+message(STATUS "📚 Bibliothèques:")
+message(STATUS "   • libapkm.a + libapkm.so")
+message(STATUS "   • libapsm.a + libapsm.so")
+message(STATUS "   • libbool.a + libbool.so")
+message(STATUS "")
+message(STATUS "🔧 TOML support: ✅")
+message(STATUS "📦 Multi-repo: ✅")
+message(STATUS "📦 SELP support: ✅")
+message(STATUS "")
+message(STATUS "📦 Formats de packaging:")
+foreach(gen ${CPACK_GENERATOR})
+    message(STATUS "   • ${gen}")
+endforeach()
+message(STATUS "==================================================")
