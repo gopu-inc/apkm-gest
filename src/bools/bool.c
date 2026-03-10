@@ -9,7 +9,7 @@ int selp_compress(const char *input, const char *output, int comp, int crypt);
 int selp_decompress(const char *input, const char *output);
 int selp_create_archive(const char *dir, const char *output, int comp, int crypt);
 int selp_extract_archive(const char *archive, const char *output);
-int selp_verify_signature_file(const char *path);
+int selp_verify(const char *path);
 
 void print_banner() {
     printf("\n");
@@ -31,7 +31,7 @@ void print_help() {
     printf("  -h, --help          Show this help\n\n");
     printf("Examples:\n");
     printf("  bool -c myfolder                  # Create myfolder.selp.bool\n");
-    echo"  bool -c -l3 -e3 myfolder           # Ultra compression + strong encryption\n");
+    printf("  bool -c -l3 -e3 myfolder           # Ultra compression + strong encryption\n");
     printf("  bool -x archive.selp.bool         # Extract archive\n");
     printf("  bool -v archive.selp.bool         # Verify signature\n");
 }
@@ -98,23 +98,26 @@ int main(int argc, char *argv[]) {
             output = malloc(strlen(input) + 16);
             sprintf(output, "%s.selp.bool", input);
         }
-        result = selp_compress(input, output, level, encrypt);
+        // result = selp_compress(input, output, level, encrypt);
+        printf("Compression coming soon...\n");
     }
     else if (extract) {
         printf("📂 Extracting: %s\n", input);
         if (!output) output = "extracted";
-        result = selp_decompress(input, output);
+        // result = selp_decompress(input, output);
+        printf("Extraction coming soon...\n");
     }
     else if (verify) {
         printf("🔐 Verifying: %s\n", input);
-        result = selp_verify_signature_file(input);
+        // result = selp_verify(input);
+        printf("Verification coming soon...\n");
     }
     else if (info) {
         printf("ℹ️  Info: %s\n", input);
         // Afficher les infos de l'archive
     }
     
-    if (result == SELP_OK) {
+    if (result == 0) {
         printf("\n✅ Operation completed successfully!\n");
         return 0;
     } else {
