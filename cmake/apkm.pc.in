@@ -4,7 +4,8 @@ libdir=${exec_prefix}/lib
 includedir=${prefix}/include/apkm
 
 Name: apkm
-Description: Advanced Package Manager
+Description: APKM Package Manager Library
 Version: @PROJECT_VERSION@
+Requires: libcurl openssl sqlite3 libsodium libarchive lz4 zstd yaml-0.1 jansson argon2 libseccomp libcap-ng blake3
 Libs: -L${libdir} -lapkm
 Cflags: -I${includedir}
