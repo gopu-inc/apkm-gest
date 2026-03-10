@@ -4,7 +4,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-// Fonction pour que 'file' reconnaisse le format SELP
+/* // Fonction pour que 'file' reconnaisse le format SELP mais deja dans selp_info.c
 void selp_magic_info(const char *path) {
     FILE *fp = fopen(path, "rb");
     if (!fp) return;
@@ -33,7 +33,7 @@ void selp_magic_info(const char *path) {
     printf("Ratio: %.1f%%\n", 100.0 * header.compressed_size / header.original_size);
     printf("Files: %llu\n", (unsigned long long)header.file_count);
     printf("Comment: %s\n", header.comment);
-}
+} */
 // Ajouter un fichier à l'archive
 static int add_file_to_archive(selp_ctx_t *ctx, const char *path) {
     FILE *f = fopen(path, "rb");
