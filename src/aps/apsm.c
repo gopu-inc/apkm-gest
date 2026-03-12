@@ -3,6 +3,7 @@
 #include <string.h>
 #include <curl/curl.h>
 #include <unistd.h>
+#include <stdarg.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
