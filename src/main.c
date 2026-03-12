@@ -92,7 +92,7 @@ void print_info(const char *format, ...) {
     
     va_list args;
     va_start(args, format);
-    printf("ℹ️  ");
+    printf("[!]  ");
     vprintf(format, args);
     printf("\n");
     va_end(args);
@@ -103,7 +103,7 @@ void print_success(const char *format, ...) {
     
     va_list args;
     va_start(args, format);
-    printf("✅ ");
+    printf("[V] ");
     vprintf(format, args);
     printf("\n");
     va_end(args);
@@ -112,7 +112,7 @@ void print_success(const char *format, ...) {
 void print_error(const char *format, ...) {
     va_list args;
     va_start(args, format);
-    fprintf(stderr, "❌ ");
+    fprintf(stderr, "[x] ");
     vfprintf(stderr, format, args);
     fprintf(stderr, "\n");
     va_end(args);
@@ -123,7 +123,7 @@ void print_warning(const char *format, ...) {
     
     va_list args;
     va_start(args, format);
-    printf("⚠️  ");
+    printf("[!!]  ");
     vprintf(format, args);
     printf("\n");
     va_end(args);
@@ -264,23 +264,21 @@ int search_package(const char *name, char *version, char *url, char *author, int
     for (int i = 0; i < repo_count; i++) {
         if (!repositories[i].enabled) continue;
         
-        debug_print("Searching in %s: %s/v5.2/package/%s", 
-                   repositories[i].name, repositories[i].url, name);
-        
         CURL *curl = curl_easy_init();
         if (!curl) continue;
         
-        // Utiliser le bon endpoint : /v5.2/package/<name>
+        // --- URL CORRECTE ---
         char search_url[512];
         snprintf(search_url, sizeof(search_url), "%s/v5.2/package/%s", 
                  repositories[i].url, name);
+        
+        debug_print("Searching: %s", search_url);
         
         struct curl_response resp = {0};
         curl_easy_setopt(curl, CURLOPT_URL, search_url);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         
         CURLcode res = curl_easy_perform(curl);
         curl_easy_cleanup(curl);
@@ -295,48 +293,45 @@ int search_package(const char *name, char *version, char *url, char *author, int
                 if (json_object_object_get_ex(parsed, "package", &package_obj)) {
                     struct json_object *tmp;
                     
-                    if (json_object_object_get_ex(package_obj, "version", &tmp))
-                        strcpy(version, json_object_get_string(tmp));
-                    else
-                        strcpy(version, "0.0.0");
+                    // Extraire les infos
+                    if (version) {
+                        if (json_object_object_get_ex(package_obj, "version", &tmp))
+                            strcpy(version, json_object_get_string(tmp));
+                    }
+                    if (author) {
+                        if (json_object_object_get_ex(package_obj, "author", &tmp))
+                            strcpy(author, json_object_get_string(tmp));
+                    }
+                    if (downloads) {
+                        if (json_object_object_get_ex(package_obj, "downloads", &tmp))
+                            *downloads = json_object_get_int(tmp);
+                    }
                     
-                    if (author && json_object_object_get_ex(package_obj, "author", &tmp))
-                        strcpy(author, json_object_get_string(tmp));
-                    
-                    if (downloads && json_object_object_get_ex(package_obj, "downloads", &tmp))
-                        *downloads = json_object_get_int(tmp);
-                    
-                    // Récupérer release et arch
+                    // Récupérer release et arch pour l'URL de téléchargement
                     const char *release = "r0";
                     const char *arch = "x86_64";
-                    
                     if (json_object_object_get_ex(package_obj, "release", &tmp))
                         release = json_object_get_string(tmp);
                     if (json_object_object_get_ex(package_obj, "arch", &tmp))
                         arch = json_object_get_string(tmp);
                     
                     // Construire l'URL de téléchargement
-                    snprintf(url, 512, "%s/package/download/%s/%s/%s/%s/%s", 
-                             repositories[i].url, 
-                             "public",  // scope par défaut
-                             name, 
-                             version, 
-                             release, 
-                             arch);
+                    if (url) {
+                        snprintf(url, 512, "%s/package/download/public/%s/%s/%s/%s", 
+                                 repositories[i].url, name, version, release, arch);
+                    }
                     
                     json_object_put(parsed);
                     free(resp.data);
-                    return 0;
+                    return 0; // Succès
                 }
                 json_object_put(parsed);
             }
             free(resp.data);
         }
     }
-    
-    return -1;
+    return -1; // Non trouvé
 }
-
 // ============================================================================
 // TÉLÉCHARGEMENT
 // ============================================================================
