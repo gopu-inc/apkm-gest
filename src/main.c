@@ -458,7 +458,6 @@ int install_from_manifest(const char *extract_dir, manifest_t *manifest) {
     print_success("Installation completed");
     return 0;
 }
-
 // ============================================================================
 // INSTALLATION PRINCIPALE
 // ============================================================================
@@ -520,23 +519,34 @@ int install_package(const char *name, const char *version_specific) {
         }
     } else {
         print_warning("No Manifest.toml found, using legacy installation");
-        legacy_install:
-        // Installation à l'ancienne
-        char cmd[1024];
-        snprintf(cmd, sizeof(cmd), 
-                 "cp '%s'/* /usr/local/bin/ 2>/dev/null || "
-                 "cp '%s'/usr/bin/* /usr/local/bin/ 2>/dev/null", 
-                 extract_dir, extract_dir);
-        system(cmd);
+        goto legacy_install;
     }
     
-    // Nettoyer
+    // Nettoyer (chemin normal)
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "rm -rf %s", extract_dir);
     system(cmd);
     unlink(tmp_path);
     
     print_success("Package %s installed", name);
+    return 0;
+
+legacy_install:
+    // Installation à l'ancienne
+    char legacy_cmd[1024];
+    snprintf(legacy_cmd, sizeof(legacy_cmd), 
+             "cp '%s'/* /usr/local/bin/ 2>/dev/null || "
+             "cp '%s'/usr/bin/* /usr/local/bin/ 2>/dev/null", 
+             extract_dir, extract_dir);
+    system(legacy_cmd);
+    
+    // Nettoyer
+    char cleanup_cmd[1024];
+    snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s", extract_dir);
+    system(cleanup_cmd);
+    unlink(tmp_path);
+    
+    print_success("Package %s installed (legacy mode)", name);
     return 0;
 }
 
