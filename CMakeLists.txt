@@ -137,6 +137,9 @@ set(CORE_SOURCES
     src/utils.c
 )
 
+set(GET_SOURCES
+    src/get/get.c
+)
 # Sources APKM
 set(APKM_SOURCES
     src/main.c
@@ -181,6 +184,11 @@ set_target_properties(apsm_static PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
+add_library(get_static STATIC ${GET_SOURCES}) 
+set_target_properties(get_static PROPERTIES    
+    OUTPUT_NAME "get" PREFIX "lib"             
+    POSITION_INDEPENDENT_CODE ON
+)
 add_library(bool_static STATIC ${BOOL_SOURCES})
 set_target_properties(bool_static PROPERTIES 
     OUTPUT_NAME "bool" PREFIX "lib"
@@ -195,6 +203,12 @@ set_target_properties(apkm_shared PROPERTIES
     OUTPUT_NAME "apkm" PREFIX "lib"
     VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
     POSITION_INDEPENDENT_CODE ON
+)
+
+add_library(get_shared SHARED ${GET_SOURCES}) 
+set_target_properties(get_shared PROPERTIES    
+    OUTPUT_NAME "get" PREFIX "lib"             
+    VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}    POSITION_INDEPENDENT_CODE ON                
 )
 
 add_library(apsm_shared SHARED ${APSM_SOURCES})
@@ -217,15 +231,17 @@ set_target_properties(bool_shared PROPERTIES
 add_executable(apkm_bin ${APKM_SOURCES})
 target_link_libraries(apkm_bin apkm_shared)
 set_target_properties(apkm_bin PROPERTIES OUTPUT_NAME "apkm")
-
 add_executable(apsm_bin ${APSM_SOURCES})
 target_link_libraries(apsm_bin apsm_shared)
 set_target_properties(apsm_bin PROPERTIES OUTPUT_NAME "apsm")
 
+add_executable(get_bin ${GET_SOURCES})        
+target_link_libraries(get_bin apsm_shared)     
+set_target_properties(get_bin PROPERTIES OUTPUT_NAME "get")
+
 add_executable(bool_bin ${BOOL_SOURCES})
 target_link_libraries(bool_bin bool_shared)
 set_target_properties(bool_bin PROPERTIES OUTPUT_NAME "bool")
-
 # ============================================================================
 # LINK LIBRARIES (pour tous les targets)
 # ============================================================================
@@ -233,7 +249,8 @@ foreach(target
     apkm_static apkm_shared 
     apsm_static apsm_shared 
     bool_static bool_shared
-    apkm_bin apsm_bin bool_bin
+    get_static get_shared
+    apkm_bin apsm_bin get_bin bool_bin
 )
     target_link_libraries(${target}
         OpenSSL::Crypto
@@ -275,13 +292,14 @@ endforeach()
 # ============================================================================
 # INSTALLATION
 # ============================================================================
-install(TARGETS apkm_static apkm_shared apsm_static apsm_shared bool_static bool_shared
+install(TARGETS apkm_static apkm_shared apsm_static apsm_shared bool_static bool_shared get_static get_shared
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
+    
 )
 
-install(TARGETS apkm_bin apsm_bin bool_bin
+install(TARGETS apkm_bin get_bin apsm_bin bool_bin
     RUNTIME DESTINATION bin
 )
 
@@ -303,7 +321,7 @@ add_test(NAME apkm_version COMMAND apkm_bin --version)
 add_test(NAME apkm_help COMMAND apkm_bin --help)
 add_test(NAME apsm_help COMMAND apsm_bin help)
 add_test(NAME bool_help COMMAND bool_bin --help)
-
+add_test(NAME get_help COMMAND get_bin file.toml)
 # ============================================================================
 # PACKAGING CPACK
 # ============================================================================
