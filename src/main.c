@@ -461,7 +461,6 @@ int install_from_manifest(const char *extract_dir, manifest_t *manifest) {
 // ============================================================================
 // INSTALLATION PRINCIPALE
 // ============================================================================
-
 int install_package(const char *name, const char *version_specific) {
     char version[64] = "";
     char url[512] = "";
@@ -504,6 +503,8 @@ int install_package(const char *name, const char *version_specific) {
     char manifest_path[512];
     snprintf(manifest_path, sizeof(manifest_path), "%s/Manifest.toml", extract_dir);
     
+    int use_legacy = 0;
+    
     if (access(manifest_path, F_OK) == 0) {
         print_info("Found Manifest.toml");
         
@@ -515,30 +516,22 @@ int install_package(const char *name, const char *version_specific) {
             install_from_manifest(extract_dir, &manifest);
         } else {
             print_warning("Failed to parse Manifest.toml");
-            goto legacy_install;
+            use_legacy = 1;
         }
     } else {
         print_warning("No Manifest.toml found, using legacy installation");
-        goto legacy_install;
+        use_legacy = 1;
     }
     
-    // Nettoyer (chemin normal)
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "rm -rf %s", extract_dir);
-    system(cmd);
-    unlink(tmp_path);
-    
-    print_success("Package %s installed", name);
-    return 0;
-
-legacy_install:
-    // Installation à l'ancienne
-    char legacy_cmd[1024];
-    snprintf(legacy_cmd, sizeof(legacy_cmd), 
-             "cp '%s'/* /usr/local/bin/ 2>/dev/null || "
-             "cp '%s'/usr/bin/* /usr/local/bin/ 2>/dev/null", 
-             extract_dir, extract_dir);
-    system(legacy_cmd);
+    if (use_legacy) {
+        // Installation à l'ancienne
+        char legacy_cmd[1024];
+        snprintf(legacy_cmd, sizeof(legacy_cmd), 
+                 "cp '%s'/* /usr/local/bin/ 2>/dev/null || "
+                 "cp '%s'/usr/bin/* /usr/local/bin/ 2>/dev/null", 
+                 extract_dir, extract_dir);
+        system(legacy_cmd);
+    }
     
     // Nettoyer
     char cleanup_cmd[1024];
@@ -546,7 +539,7 @@ legacy_install:
     system(cleanup_cmd);
     unlink(tmp_path);
     
-    print_success("Package %s installed (legacy mode)", name);
+    print_success("Package %s installed", name);
     return 0;
 }
 
