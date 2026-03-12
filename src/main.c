@@ -258,7 +258,6 @@ int parse_manifest(const char *path, manifest_t *manifest) {
 // ============================================================================
 // RECHERCHE DE PACKAGE
 // ============================================================================
-
 int search_package(const char *name, char *version, char *url, char *author, int *downloads) {
     load_repositories();
     
@@ -271,6 +270,7 @@ int search_package(const char *name, char *version, char *url, char *author, int
         CURL *curl = curl_easy_init();
         if (!curl) continue;
         
+        // Utiliser le bon endpoint : /v5.2/package/<name>
         char search_url[512];
         snprintf(search_url, sizeof(search_url), "%s/v5.2/package/%s", 
                  repositories[i].url, name);
@@ -280,14 +280,18 @@ int search_package(const char *name, char *version, char *url, char *author, int
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         
         CURLcode res = curl_easy_perform(curl);
         curl_easy_cleanup(curl);
         
         if (res == CURLE_OK && resp.data) {
+            debug_print("Response: %s", resp.data);
+            
             struct json_object *parsed = json_tokener_parse(resp.data);
             if (parsed) {
                 struct json_object *package_obj;
+                // La réponse est { "package": { ... } }
                 if (json_object_object_get_ex(parsed, "package", &package_obj)) {
                     struct json_object *tmp;
                     
@@ -302,7 +306,7 @@ int search_package(const char *name, char *version, char *url, char *author, int
                     if (downloads && json_object_object_get_ex(package_obj, "downloads", &tmp))
                         *downloads = json_object_get_int(tmp);
                     
-                    // Construire l'URL de téléchargement
+                    // Récupérer release et arch
                     const char *release = "r0";
                     const char *arch = "x86_64";
                     
@@ -311,8 +315,14 @@ int search_package(const char *name, char *version, char *url, char *author, int
                     if (json_object_object_get_ex(package_obj, "arch", &tmp))
                         arch = json_object_get_string(tmp);
                     
-                    snprintf(url, 512, "%s/download/public/%s/%s/%s/%s", 
-                             repositories[i].url, name, version, release, arch);
+                    // Construire l'URL de téléchargement
+                    snprintf(url, 512, "%s/package/download/%s/%s/%s/%s/%s", 
+                             repositories[i].url, 
+                             "public",  // scope par défaut
+                             name, 
+                             version, 
+                             release, 
+                             arch);
                     
                     json_object_put(parsed);
                     free(resp.data);
@@ -349,6 +359,7 @@ int download_package(const char *url, const char *output_path) {
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "APKM/2.0");
     
     CURLcode res = curl_easy_perform(curl);
     fclose(fp);
@@ -357,7 +368,14 @@ int download_package(const char *url, const char *output_path) {
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(curl);
     
-    if (res != CURLE_OK || http_code != 200) {
+    if (res != CURLE_OK) {
+        debug_print("Download failed: %s", curl_easy_strerror(res));
+        unlink(output_path);
+        return -1;
+    }
+    
+    if (http_code != 200) {
+        debug_print("HTTP error: %ld", http_code);
         unlink(output_path);
         return -1;
     }
@@ -369,9 +387,9 @@ int download_package(const char *url, const char *output_path) {
         return -1;
     }
     
+    debug_print("Download complete: %ld bytes", st.st_size);
     return 0;
 }
-
 // ============================================================================
 // EXTRACTION AVEC TAR
 // ============================================================================
