@@ -10,7 +10,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/prctl.h>
-#include <sys/capability.h>
 #include <sys/syscall.h>
 #include <grp.h>
 #include <pwd.h>
@@ -18,27 +17,33 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <time.h>
-#include <dirent.h> 
-#include <libgen.h> 
+#include <dirent.h>
+#include <libgen.h>
+#include <sys/types.h>
+#include <sys/sysmacros.h>
+
+#ifdef HAVE_LIBCAP
+#include <sys/capability.h>
+#endif
 
 #define ANV_VERSION "1.0.0"
 #define ANV_NAME_MAX 64
-#define ANV_PATH_MAX 512
+#define ANV_PATH_MAX 5024
 #define ANV_MAGIC "ANV_SECURE_ENV"
 #define ANV_NAMESBAR "__namesbar"
 
 // Niveaux de sécurité
-#define ANV_SEC_NONE    0  // Aucune isolation
-#define ANV_SEC_LOW     1  // Isolation basique
-#define ANV_SEC_MEDIUM  2  // Isolation standard
-#define ANV_SEC_HIGH    3  // Isolation renforcée
-#define ANV_SEC_PARANOID 4 // Isolation maximale
+#define ANV_SEC_NONE    0
+#define ANV_SEC_LOW     1
+#define ANV_SEC_MEDIUM  2
+#define ANV_SEC_HIGH    3
+#define ANV_SEC_PARANOID 4
 
 // Types d'environnements
-#define ANV_TYPE_APKM   0  // Pour APKM
-#define ANV_TYPE_BOOL   1  // Pour BOOL
-#define ANV_TYPE_APSM   2  // Pour APSM
-#define ANV_TYPE_CUSTOM 3  // Personnalisé
+#define ANV_TYPE_APKM   0
+#define ANV_TYPE_BOOL   1
+#define ANV_TYPE_APSM   2
+#define ANV_TYPE_CUSTOM 3
 
 // Codes d'erreur
 #define ANV_OK          0
@@ -48,6 +53,7 @@
 #define ANV_ERR_MOUNT   -4
 #define ANV_ERR_CAP     -5
 #define ANV_ERR_NS      -6
+#define ANV_ERR_DOWNLOAD -7
 
 // Structure d'environnement
 typedef struct {
@@ -63,11 +69,12 @@ typedef struct {
     char hostname[64];
     time_t created;
     time_t last_used;
-    int namespaces[8];  // PID, NET, IPC, UTS, MOUNT, USER, CGROUP, TIME
+    int namespaces[8];
     int is_running;
     char prompt_prefix[32];
     char shell_path[256];
     char rootfs[ANV_PATH_MAX];
+    int docker_enabled;
     struct {
         int no_network;
         int read_only;
@@ -85,6 +92,7 @@ typedef struct {
     char base_path[ANV_PATH_MAX];
     int default_security;
     int verbose;
+    int docker_available;
 } anv_ctx_t;
 
 // Prototypes
@@ -96,6 +104,7 @@ int anv_stop(anv_ctx_t *ctx, const char *name);
 int anv_delete(anv_ctx_t *ctx, const char *name);
 int anv_list(anv_ctx_t *ctx);
 int anv_check_root(void);
-void anv_set_prompt(anv_env_t *env, char *prompt, size_t size);
+int anv_download_supersu(void);
+int anv_check_docker(void);
 
 #endif
