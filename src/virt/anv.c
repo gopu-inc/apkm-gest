@@ -294,7 +294,7 @@ static int setup_rootfs(anv_env_t *env) {
 }
 
 // ============================================================================
-// INSTALLATION SUPERSU DANS L'ENVIRONNEMENT
+// INSTALLATION SUPERSU DANS L'ENVIRONNEMENT (CORRIGÉE)
 // ============================================================================
 static int install_supersu(anv_env_t *env) {
     // Vérifier si SuperSU est déjà installé dans cet environnement
@@ -304,6 +304,12 @@ static int install_supersu(anv_env_t *env) {
     if (access(check_path, F_OK) == 0) {
         printf("[ANV] 🔐 SuperSU already installed in environment\n");
         return ANV_OK;
+    }
+    
+    // Vérifier si le fichier SuperSU existe
+    if (access(SUPERSU_PATH, F_OK) != 0) {
+        printf("[ANV] ⚠️ SuperSU not found, downloading...\n");
+        anv_download_supersu();
     }
     
     printf("[ANV] 🔐 Installing SuperSU in environment...\n");
@@ -318,14 +324,19 @@ static int install_supersu(anv_env_t *env) {
     // Copier SuperSU
     if (access(SUPERSU_PATH, F_OK) == 0) {
         char cmd[MAX_CMD];
+        
+        // Copier l'APK
         snprintf(cmd, sizeof(cmd), "cp %s %s/ 2>/dev/null", SUPERSU_PATH, env->rootfs);
         system(cmd);
         
-        // Extraire si c'est un APK
+        // Extraire l'APK
         snprintf(cmd, sizeof(cmd), 
                  "cd %s && unzip -o supersu.apk -d system/ > /dev/null 2>&1", 
                  env->rootfs);
         system(cmd);
+        
+        // Vérifier l'extraction
+        printf("[ANV] 📦 SuperSU APK extracted\n");
     }
     
     // Créer le binaire su
@@ -333,23 +344,36 @@ static int install_supersu(anv_env_t *env) {
     if (f) {
         fprintf(f, "#!/system/bin/sh\n");
         fprintf(f, "# SuperSU wrapper for ANV\n");
+        fprintf(f, "export PATH=/system/bin:$PATH\n");
         fprintf(f, "if [ \"$1\" = \"-c\" ]; then\n");
         fprintf(f, "    shift\n");
         fprintf(f, "    sh -c \"$@\"\n");
+        fprintf(f, "elif [ \"$1\" = \"--help\" ] || [ \"$1\" = \"-h\" ]; then\n");
+        fprintf(f, "    echo 'SuperSU for ANV environments'\n");
+        fprintf(f, "    echo 'Usage: su [options] [command]'\n");
         fprintf(f, "else\n");
         fprintf(f, "    sh\n");
         fprintf(f, "fi\n");
         fclose(f);
-        chmod(dest_path, 06755);  // setuid root
+        chmod(dest_path, 04755);  // setuid root
     }
     
-    printf("[ANV] 🔐 SuperSU installed in environment\n");
+    // Créer un lien symbolique
+    char bin_path[ANV_PATH_MAX];
+    snprintf(bin_path, sizeof(bin_path), "%s/bin/su", env->rootfs);
+    unlink(bin_path);
+    symlink(dest_path, bin_path);
+    
+    // Vérifier l'installation
+    if (access(dest_path, F_OK) == 0) {
+        printf("[ANV] 🔐 SuperSU installed in environment (setuid: %o)\n", 
+               chmod(dest_path, 04755));
+    } else {
+        printf("[ANV] ❌ SuperSU installation failed\n");
+    }
+    
     return ANV_OK;
 }
-
-// ============================================================================
-// FONCTION PRINCIPALE POUR LE PROCESSUS ENFANT (PID 1)
-// ============================================================================
 // ============================================================================
 // FONCTION PRINCIPALE POUR LE PROCESSUS ENFANT (PID 1) - CORRIGÉE
 // ============================================================================
