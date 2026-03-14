@@ -1,0 +1,8 @@
+[dep]
+jsonlib = "1.5.0"
+flask = "4.5.0"
+
+
+[dep.json]
+version = "2.0.0"
+edition = "3.0.0"

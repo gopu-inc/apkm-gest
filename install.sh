@@ -39,6 +39,10 @@ if [ -d "usr/local/include/apkm" ]; then
     cp -r usr/local/include/apkm/* /usr/local/include/apkm/ 2>/dev/null || true
 fi
 
+if [ -d "docs" ]; then
+    mkdir /usr/local/include/apkm/docs
+    cp README.md DOCTEXT.txt /usr/local/include/apkm/docs
+fi
 echo ""
 echo "✅ APKM installation complete!"
 echo ""

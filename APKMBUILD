@@ -12,6 +12,6 @@ $APKMDOC::[%OPEN+==README.md]
 $APKMINCLUDES::include
 $APKMLIBS::lib
 $APKMPKGCONFIG::lib/pkgconfig
-$APKMMAKE:: make
+$APKMMAKE:: cd build && cmake .. && make -j4 && cp bin/* /usr/local/bin/
 $APKMCHECK:: make test
 $APKMINSTALL:: make install DESTDIR="$DESTDIR"
