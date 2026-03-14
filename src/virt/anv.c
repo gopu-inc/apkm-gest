@@ -350,6 +350,9 @@ static int install_supersu(anv_env_t *env) {
 // ============================================================================
 // FONCTION PRINCIPALE POUR LE PROCESSUS ENFANT (PID 1)
 // ============================================================================
+// ============================================================================
+// FONCTION PRINCIPALE POUR LE PROCESSUS ENFANT (PID 1) - CORRIGÉE
+// ============================================================================
 static int child_func(void *arg) {
     anv_env_t *env = (anv_env_t *)arg;
     
@@ -387,8 +390,8 @@ static int child_func(void *arg) {
     // Installer NamesBar
     install_namesbar(env);
     
-    // Installer SuperSU si nécessaire
-    if (geteuid() == 0 && access(SUPERSU_PATH, F_OK) == 0) {
+    // Installer SuperSI (une seule fois dans l'environnement)
+    if (geteuid() == 0) {
         install_supersu(env);
     }
     
@@ -411,7 +414,6 @@ static int child_func(void *arg) {
     
     return ANV_OK;
 }
-
 // ============================================================================
 // API PUBLIQUE - CRÉATION
 // ============================================================================
