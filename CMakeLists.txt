@@ -137,6 +137,10 @@ set(CORE_SOURCES
     src/utils.c
 )
 
+set(ANV_SOURCES
+    src/virt/anv.c
+)
+
 set(GET_SOURCES
     src/get/get.c
 )
@@ -169,6 +173,12 @@ set_target_properties(apkm_static PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
+add_library(anv_static STATIC ${ANV_SOURCES})
+set_target_properties(apkm_static PROPERTIES 
+    OUTPUT_NAME "anv" PREFIX "lib"
+    POSITION_INDEPENDENT_CODE ON
+)
+
 add_library(apsm_static STATIC ${APSM_SOURCES})
 set_target_properties(apsm_static PROPERTIES 
     OUTPUT_NAME "apsm" PREFIX "lib"
@@ -192,6 +202,13 @@ set_target_properties(bool_static PROPERTIES
 add_library(apkm_shared SHARED ${CORE_SOURCES})
 set_target_properties(apkm_shared PROPERTIES 
     OUTPUT_NAME "apkm" PREFIX "lib"
+    VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
+    POSITION_INDEPENDENT_CODE ON
+)
+
+add_library(anv_shared SHARED ${ANV_SOURCES})
+set_target_properties(apkm_shared PROPERTIES 
+    OUTPUT_NAME "anv" PREFIX "lib"
     VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
     POSITION_INDEPENDENT_CODE ON
 )
@@ -226,6 +243,10 @@ add_executable(apsm_bin ${APSM_SOURCES})
 target_link_libraries(apsm_bin apsm_shared)
 set_target_properties(apsm_bin PROPERTIES OUTPUT_NAME "apsm")
 
+add_executable(anv_bin ${ANV_SOURCES})
+target_link_libraries(anv_bin anv_shared)
+set_target_properties(anv_bin PROPERTIES OUTPUT_NAME "anv")
+ 
 add_executable(get_bin ${GET_SOURCES})        
 target_link_libraries(get_bin apsm_shared)     
 set_target_properties(get_bin PROPERTIES OUTPUT_NAME "get")
@@ -241,7 +262,8 @@ foreach(target
     apsm_static apsm_shared 
     bool_static bool_shared
     get_static get_shared
-    apkm_bin apsm_bin get_bin bool_bin
+    anv_static anv_shared
+    apkm_bin apsm_bin get_bin anv_bin bool_bin
 )
     target_link_libraries(${target}
         OpenSSL::Crypto
