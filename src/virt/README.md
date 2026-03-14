@@ -109,7 +109,7 @@ $ anv enter secure-apkm
 
 Licence
 
-GPL-3.0
+MIT
 
 ```
 
