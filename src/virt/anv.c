@@ -63,10 +63,10 @@ int anv_check_root(void) {
     if (geteuid() == 0) {
         if (!root_checked) {
             printf("\033[1;31m");
-            printf("╔════════════════════════════════════════════════════╗\n");
-            printf("║  [track backsh >_< root no secure]               ║\n");
-            printf("║  Running as root - checking SuperSU...           ║\n");
-            printf("╚════════════════════════════════════════════════════╝\n");
+            printf("\n");
+            printf("  [track backsh >_< root no secure]         \n");
+            printf("  Running as root - checking SuperSU...\n");
+            printf("\n");
             printf("\033[0m");
             
             // Télécharger SuperSU seulement si pas déjà fait
@@ -790,4 +790,107 @@ static int save_env_pid(anv_env_t *env) {
     fclose(f);
     
     return ANV_OK;
+}
+// ============================================================================
+// MAIN - CLI (À AJOUTER À LA FIN DU FICHIER)
+// ============================================================================
+void print_usage(void) {
+    printf("\n");
+    printf("╔══════════════════════════════════════════════════════════════╗\n");
+    printf("║  ANV v%s - Advanced Namespace Virtualization                ║\n", ANV_VERSION);
+    printf("║  [track backsh >_< secure environment for APKM/APSM/BOOL]   ║\n");
+    printf("╚══════════════════════════════════════════════════════════════╝\n\n");
+    
+    printf("USAGE:\n");
+    printf("  anv <command> [arguments]\n\n");
+    
+    printf("COMMANDS:\n");
+    printf("  create <name> [type] [security]  Create an environment\n");
+    printf("  start <name>                      Start the environment\n");
+    printf("  enter <name>                       Enter the environment\n");
+    printf("  stop <name>                        Stop the environment\n");
+    printf("  delete <name>                       Delete the environment\n");
+    printf("  list                                List all environments\n");
+    printf("  help                                Show this help\n\n");
+    
+    printf("TYPES (for APKM ecosystem):\n");
+    printf("  0 - APKM    (Package Manager)     - Install packages\n");
+    printf("  1 - BOOL    (Package Builder)     - Build packages\n");
+    printf("  2 - APSM    (Package Publisher)   - Publish packages\n");
+    printf("  3 - CUSTOM  (Generic)             - Any application\n\n");
+    
+    printf("SECURITY LEVELS:\n");
+    printf("  0 - None     (No isolation)       - Not recommended\n");
+    printf("  1 - Low      (Basic isolation)    - Mount namespace only\n");
+    printf("  2 - Medium   (Standard)           - PID, UTS, IPC\n");
+    printf("  3 - High     (Reinforced)         - NET, USER, CGROUP ← RECOMMENDED\n");
+    printf("  4 - Paranoid (Maximum)            - + seccomp, time\n\n");
+    
+    printf("EXAMPLES:\n");
+    printf("  anv create apkm-dev 0 3           # Create APKM environment (level 3)\n");
+    printf("  anv start apkm-dev                 # Start the environment\n");
+    printf("  anv enter apkm-dev                  # Enter (prompt: [::apkm-dev::]user@host:~$)\n");
+    printf("  anv stop apkm-dev                   # Stop the environment\n");
+    printf("  anv delete apkm-dev                  # Delete the environment\n\n");
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        print_usage();
+        return 0;
+    }
+    
+    anv_ctx_t ctx;
+    anv_init(&ctx);
+    
+    if (strcmp(argv[1], "create") == 0) {
+        if (argc < 3) {
+            printf("❌ Missing environment name\n");
+            return 1;
+        }
+        int type = (argc >= 4) ? atoi(argv[3]) : ANV_TYPE_APKM;
+        int security = (argc >= 5) ? atoi(argv[4]) : ANV_SEC_HIGH;
+        return anv_create(&ctx, argv[2], type, security);
+    }
+    else if (strcmp(argv[1], "start") == 0) {
+        if (argc < 3) {
+            printf("❌ Missing environment name\n");
+            return 1;
+        }
+        return anv_start(&ctx, argv[2]);
+    }
+    else if (strcmp(argv[1], "enter") == 0) {
+        if (argc < 3) {
+            printf("❌ Missing environment name\n");
+            return 1;
+        }
+        return anv_enter(&ctx, argv[2], NULL);
+    }
+    else if (strcmp(argv[1], "stop") == 0) {
+        if (argc < 3) {
+            printf("❌ Missing environment name\n");
+            return 1;
+        }
+        return anv_stop(&ctx, argv[2]);
+    }
+    else if (strcmp(argv[1], "delete") == 0) {
+        if (argc < 3) {
+            printf("❌ Missing environment name\n");
+            return 1;
+        }
+        return anv_delete(&ctx, argv[2]);
+    }
+    else if (strcmp(argv[1], "list") == 0) {
+        return anv_list(&ctx);
+    }
+    else if (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "--help") == 0) {
+        print_usage();
+    }
+    else {
+        printf("❌ Unknown command: %s\n", argv[1]);
+        print_usage();
+        return 1;
+    }
+    
+    return 0;
 }
