@@ -24,7 +24,7 @@
 #define SUPERSU_PATH "/usr/local/share/anv/supersu.apk"
 #define DOCKER_CHECK "docker --version > /dev/null 2>&1"
 #define MAX_CMD 4096
-#define STACK_SIZE (8 * 1024 * 1024)  // 8MB stack
+#define STACK_SIZE (8 * 1024 * 1024)
 
 // ============================================================================
 // STRUCTURES POUR CURL
@@ -51,6 +51,7 @@ static int setup_rootfs(anv_env_t *env);
 static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
 static int supersu_already_downloaded(void);
 static int ensure_supersu_downloaded(void);
+static int child_process(anv_env_t *env);
 
 // ============================================================================
 // VÉRIFICATION SUPERSU DANS L'ENVIRONNEMENT
@@ -61,7 +62,6 @@ static int verify_supersu_in_env(anv_env_t *env) {
     int found = 0;
     char path[ANV_PATH_MAX];
     
-    // Vérifier les différents emplacements possibles
     const char *locations[] = {
         "/system/bin/su",
         "/bin/su",
@@ -79,7 +79,6 @@ static int verify_supersu_in_env(anv_env_t *env) {
             printf("[ANV] ✅ SuperSU found at %s (mode: %o, size: %ld)\n", 
                    locations[i], st.st_mode & 07777, st.st_size);
             
-            // Vérifier le setuid
             if (st.st_mode & S_ISUID) {
                 printf("[ANV] 🔐 SuperSU has setuid bit enabled\n");
             } else {
@@ -90,7 +89,6 @@ static int verify_supersu_in_env(anv_env_t *env) {
         }
     }
     
-    // Vérifier aussi l'APK
     snprintf(path, sizeof(path), "%s/supersu.apk", env->rootfs);
     if (access(path, F_OK) == 0) {
         struct stat st;
@@ -107,7 +105,7 @@ static int verify_supersu_in_env(anv_env_t *env) {
 }
 
 // ============================================================================
-// TÉLÉCHARGEMENT SUPERSU (une seule fois)
+// TÉLÉCHARGEMENT SUPERSU
 // ============================================================================
 static int supersu_already_downloaded(void) {
     return (access(SUPERSU_PATH, F_OK) == 0);
@@ -149,10 +147,8 @@ int anv_download_supersu(void) {
         res = curl_easy_perform(curl_handle);
         
         if(res == CURLE_OK) {
-            // Créer le répertoire
             mkdir("/usr/local/share/anv", 0755);
             
-            // Sauvegarder le fichier
             FILE *fp = fopen(SUPERSU_PATH, "wb");
             if(fp) {
                 fwrite(chunk.memory, 1, chunk.size, fp);
@@ -194,34 +190,29 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 }
 
 // ============================================================================
-// INSTALLATION SUPERSU DANS L'ENVIRONNEMENT
+// INSTALLATION SUPERSU
 // ============================================================================
 static int install_supersu(anv_env_t *env) {
     printf("[ANV] 🔐 Installing SuperSU in environment...\n");
     
-    // S'assurer que SuperSU est téléchargé
     if (ensure_supersu_downloaded() != ANV_OK) {
         printf("[ANV] ❌ Cannot install SuperSU - download failed\n");
         return ANV_ERR_DOWNLOAD;
     }
     
-    // Créer les répertoires
     mkdir_p(env->rootfs, "/system/bin");
     mkdir_p(env->rootfs, "/system/app/SuperSU");
     mkdir_p(env->rootfs, "/system/xbin");
     
-    // Copier l'APK
     char cmd[MAX_CMD];
     snprintf(cmd, sizeof(cmd), "cp %s %s/ 2>/dev/null", SUPERSU_PATH, env->rootfs);
     system(cmd);
     
-    // Extraire l'APK
     snprintf(cmd, sizeof(cmd), 
              "cd %s && unzip -o supersu.apk -d system/ > /dev/null 2>&1", 
              env->rootfs);
     system(cmd);
     
-    // Créer le binaire su
     char su_path[ANV_PATH_MAX];
     snprintf(su_path, sizeof(su_path), "%s/system/bin/su", env->rootfs);
     
@@ -237,23 +228,14 @@ static int install_supersu(anv_env_t *env) {
         fprintf(f, "elif [ \"$1\" = \"--help\" ] || [ \"$1\" = \"-h\" ]; then\n");
         fprintf(f, "    echo 'SuperSU for ANV environments'\n");
         fprintf(f, "    echo 'Usage: su [options] [command]'\n");
-        fprintf(f, "    echo ''\n");
-        fprintf(f, "    echo 'Options:'\n");
-        fprintf(f, "    echo '  -c COMMAND  Run command as root'\n");
-        fprintf(f, "    echo '  -h, --help  Show this help'\n");
-        fprintf(f, "    echo ''\n");
-        fprintf(f, "    echo 'Examples:'\n");
-        fprintf(f, "    echo '  su -c \"apkm install nginx\"'\n");
-        fprintf(f, "    echo '  su'\n");
         fprintf(f, "else\n");
         fprintf(f, "    echo '[ANV] SuperSU shell (root privileges)'\n");
         fprintf(f, "    sh\n");
         fprintf(f, "fi\n");
         fclose(f);
-        chmod(su_path, 04755);  // setuid root
+        chmod(su_path, 04755);
     }
     
-    // Créer des liens symboliques
     char link_path[ANV_PATH_MAX];
     snprintf(link_path, sizeof(link_path), "%s/bin/su", env->rootfs);
     unlink(link_path);
@@ -267,7 +249,6 @@ static int install_supersu(anv_env_t *env) {
     unlink(link_path);
     symlink(su_path, link_path);
     
-    // Vérifier l'installation
     return verify_supersu_in_env(env);
 }
 
@@ -347,7 +328,7 @@ int anv_init(anv_ctx_t *ctx) {
 }
 
 // ============================================================================
-// FONCTIONS DE CONFIGURATION DU ROOTFS
+// FONCTIONS DE CONFIGURATION
 // ============================================================================
 static int mkdir_p(const char *root, const char *path) {
     char full[ANV_PATH_MAX];
@@ -383,7 +364,6 @@ static int setup_rootfs(anv_env_t *env) {
         mkdir(path, 0755);
     }
     
-    // Copier les binaires APKM
     const char *apkm_bins[] = {
         "/usr/bin/apkm", "/usr/bin/apsm", "/usr/bin/bool",
         "/bin/sh", "/bin/busybox", "/bin/ls", "/bin/cat",
@@ -405,7 +385,6 @@ static int setup_rootfs(anv_env_t *env) {
         }
     }
     
-    // Config APKM
     char conf_path[ANV_PATH_MAX];
     snprintf(conf_path, sizeof(conf_path), "%s/etc/apkm/repositories.conf", env->rootfs);
     mkdir_p(env->rootfs, "/etc/apkm");
@@ -421,51 +400,69 @@ static int setup_rootfs(anv_env_t *env) {
 }
 
 // ============================================================================
-// FONCTION PRINCIPALE DU PROCESSUS ENFANT
+// FONCTION DU PROCESSUS ENFANT
 // ============================================================================
-static int child_func(void *arg) {
-    anv_env_t *env = (anv_env_t *)arg;
+static int child_process(anv_env_t *env) {
+    printf("[ANV] Child process started (PID: %d)\n", getpid());
     
-    // Monter /proc
+    if (unshare(CLONE_NEWNS) == -1) {
+        perror("unshare NEWNS");
+        return 1;
+    }
+    
+    if (unshare(CLONE_NEWUTS) == -1) {
+        perror("unshare NEWUTS");
+        return 1;
+    }
+    
+    if (unshare(CLONE_NEWIPC) == -1) {
+        perror("unshare NEWIPC");
+        return 1;
+    }
+    
+    if (unshare(CLONE_NEWPID) == -1) {
+        perror("unshare NEWPID");
+        return 1;
+    }
+    
+    mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
+    
     char proc_path[ANV_PATH_MAX];
     snprintf(proc_path, sizeof(proc_path), "%s/proc", env->rootfs);
     mkdir_p(env->rootfs, "/proc");
-    mount("proc", proc_path, "proc", 0, NULL);
+    if (mount("proc", proc_path, "proc", 0, NULL) == -1) {
+        perror("mount proc");
+    }
     
-    // Monter /dev
     char dev_path[ANV_PATH_MAX];
     snprintf(dev_path, sizeof(dev_path), "%s/dev", env->rootfs);
     mkdir_p(env->rootfs, "/dev");
-    mount("tmpfs", dev_path, "tmpfs", 0, "size=10M");
+    if (mount("tmpfs", dev_path, "tmpfs", 0, "size=10M") == -1) {
+        perror("mount dev");
+    }
     
-    // Créer les périphériques
     create_devices(env);
     
-    // Chroot
     if (chroot(env->rootfs) != 0) {
         perror("chroot");
-        return ANV_ERR_MOUNT;
+        return 1;
     }
     chdir("/");
     
-    // Set hostname
     sethostname(env->hostname, strlen(env->hostname));
     
-    // Installer NamesBar
     install_namesbar(env);
     
-    // Vérifier/installer SuperSU
     verify_supersu_in_env(env);
     
-    // Lancer le shell
     printf("\n[ANV] Environment '%s' started (security level %d)\n", 
            env->name, env->security_level);
     printf("[ANV] Type 'exit' to stop the environment\n");
     printf("[ANV] SuperSU available: try 'su --help'\n\n");
     
     execl("/bin/sh", "sh", NULL);
-    
-    return ANV_OK;
+    perror("execl");
+    return 1;
 }
 
 // ============================================================================
@@ -516,7 +513,7 @@ int anv_create(anv_ctx_t *ctx, const char *name, int type, int security) {
 }
 
 // ============================================================================
-// API PUBLIQUE - DÉMARRAGE (version avec fork)
+// API PUBLIQUE - DÉMARRAGE (VERSION FINALE AVEC FORK)
 // ============================================================================
 int anv_start(anv_ctx_t *ctx, const char *name) {
     printf("🚀 Starting environment: %s\n", name);
@@ -544,46 +541,35 @@ int anv_start(anv_ctx_t *ctx, const char *name) {
         }
     }
     
-    // Utiliser fork + unshare au lieu de clone
     pid_t pid = fork();
     
-    if (pid == 0) {
-        // Processus fils
-        if (unshare(CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWPID) == -1) {
-            perror("unshare");
-            exit(1);
-        }
-        
-        // Monter /proc pour le nouveau PID namespace
-        mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
-        
-        child_func(&env);
-        exit(0);
-    }
-    else if (pid > 0) {
-        // Processus père
-        sleep(1); // Attendre que le fils s'initialise
-        
-        env.init_pid = pid;
-        env.is_running = 1;
-        
-        printf("✅ Environment started with PID: %d\n", pid);
-        printf("   NamesBar: %s\n", ANV_NAMESBAR);
-        
-        save_env_pid(&env);
-        return ANV_OK;
-    }
-    else {
+    if (pid == -1) {
         perror("fork");
         return ANV_ERR_NS;
     }
+    
+    if (pid == 0) {
+        int ret = child_process(&env);
+        exit(ret);
+    }
+    
+    sleep(2);
+    
+    env.init_pid = pid;
+    env.is_running = 1;
+    
+    printf("✅ Environment started with PID: %d\n", pid);
+    printf("   NamesBar: %s\n", ANV_NAMESBAR);
+    
+    save_env_pid(&env);
+    return ANV_OK;
 }
 
 // ============================================================================
 // API PUBLIQUE - ENTRER
 // ============================================================================
 int anv_enter(anv_ctx_t *ctx, const char *name, char *const argv[]) {
-    (void)argv; // Ignorer
+    (void)argv;
     
     char pid_path[ANV_PATH_MAX];
     snprintf(pid_path, sizeof(pid_path), "%s/%s/pid", ctx->base_path, name);
