@@ -792,6 +792,40 @@ static int save_env_pid(anv_env_t *env) {
     return ANV_OK;
 }
 // ============================================================================
+// API PUBLIQUE - SUPPRESSION
+// ============================================================================
+int anv_delete(anv_ctx_t *ctx, const char *name) {
+    char env_path[ANV_PATH_MAX];
+    snprintf(env_path, sizeof(env_path), "%s/%s", ctx->base_path, name);
+    
+    if (access(env_path, F_OK) != 0) {
+        printf("❌ Environment '%s' not found\n", name);
+        return ANV_ERR_NOENV;
+    }
+    
+    // Vérifier s'il tourne
+    char pid_path[ANV_PATH_MAX];
+    snprintf(pid_path, sizeof(pid_path), "%s/pid", env_path);
+    if (access(pid_path, F_OK) == 0) {
+        printf("⚠️  Environment is still running. Stopping first...\n");
+        anv_stop(ctx, name);
+        sleep(1); // Attendre que le processus soit bien tué
+    }
+    
+    // Supprimer
+    char cmd[MAX_CMD];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", env_path);
+    int ret = system(cmd);
+    
+    if (ret == 0) {
+        printf("✅ Environment '%s' deleted\n", name);
+        return ANV_OK;
+    } else {
+        printf("❌ Failed to delete environment '%s'\n", name);
+        return ANV_ERR_NOENV;
+    }
+}
+// ============================================================================
 // MAIN - CLI (À AJOUTER À LA FIN DU FICHIER)
 // ============================================================================
 void print_usage(void) {
