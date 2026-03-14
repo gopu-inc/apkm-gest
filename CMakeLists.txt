@@ -305,14 +305,14 @@ endforeach()
 # ============================================================================
 # INSTALLATION
 # ============================================================================
-install(TARGETS apkm_static apkm_shared apsm_static apsm_shared bool_static bool_shared get_static get_shared
+install(TARGETS apkm_static apkm_shared apsm_static apsm_shared bool_static bool_shared get_static get_shared anv_static anv_shared
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
     
 )
 
-install(TARGETS apkm_bin get_bin apsm_bin bool_bin
+install(TARGETS apkm_bin anv_bin get_bin apsm_bin bool_bin
     RUNTIME DESTINATION bin
 )
 
@@ -323,6 +323,7 @@ install(FILES
     ${CMAKE_SOURCE_DIR}/include/sandbox.h
     ${CMAKE_SOURCE_DIR}/include/zarch.h
     ${CMAKE_SOURCE_DIR}/src/bools/bool.h
+    ${CMAKE_SOURCE_DIR}/src/virt/anv.h
     DESTINATION include/apkm
 )
 
