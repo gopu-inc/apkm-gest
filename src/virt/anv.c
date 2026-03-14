@@ -15,6 +15,7 @@
 #include <grp.h>
 #include <pwd.h>
 #include <curl/curl.h>
+#include <sys/wait.h>
 
 // ============================================================================
 // CONSTANTES
@@ -23,7 +24,7 @@
 #define SUPERSU_PATH "/usr/local/share/anv/supersu.apk"
 #define DOCKER_CHECK "docker --version > /dev/null 2>&1"
 #define MAX_CMD 4096
-#define STACK_SIZE (8 * 1024 * 1024)  // 8MB stack pour clone
+#define STACK_SIZE (8 * 1024 * 1024)  // 8MB stack
 
 // ============================================================================
 // STRUCTURES POUR CURL
@@ -37,6 +38,7 @@ struct MemoryStruct {
 // DÉCLARATIONS ANTICIPÉES
 // ============================================================================
 static int install_supersu(anv_env_t *env);
+static int verify_supersu_in_env(anv_env_t *env);
 static int setup_docker_in_env(anv_env_t *env);
 static int check_nsenter_support(void);
 static int create_devices(anv_env_t *env);
@@ -48,44 +50,131 @@ static int save_env_pid(anv_env_t *env);
 static int setup_rootfs(anv_env_t *env);
 static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
 static int supersu_already_downloaded(void);
+static int ensure_supersu_downloaded(void);
 
 // ============================================================================
-// DÉTECTION ROOT - Télécharge SuperSU UNE SEULE FOIS
+// VÉRIFICATION SUPERSU DANS L'ENVIRONNEMENT
+// ============================================================================
+static int verify_supersu_in_env(anv_env_t *env) {
+    printf("[ANV] 🔍 Verifying SuperSU in environment...\n");
+    
+    int found = 0;
+    char path[ANV_PATH_MAX];
+    
+    // Vérifier les différents emplacements possibles
+    const char *locations[] = {
+        "/system/bin/su",
+        "/bin/su",
+        "/sbin/su",
+        "/usr/bin/su",
+        "/system/xbin/su",
+        NULL
+    };
+    
+    for (int i = 0; locations[i]; i++) {
+        snprintf(path, sizeof(path), "%s%s", env->rootfs, locations[i]);
+        if (access(path, F_OK) == 0) {
+            struct stat st;
+            stat(path, &st);
+            printf("[ANV] ✅ SuperSU found at %s (mode: %o, size: %ld)\n", 
+                   locations[i], st.st_mode & 07777, st.st_size);
+            
+            // Vérifier le setuid
+            if (st.st_mode & S_ISUID) {
+                printf("[ANV] 🔐 SuperSU has setuid bit enabled\n");
+            } else {
+                printf("[ANV] ⚠️  SuperSU missing setuid bit, fixing...\n");
+                chmod(path, 04755);
+            }
+            found = 1;
+        }
+    }
+    
+    // Vérifier aussi l'APK
+    snprintf(path, sizeof(path), "%s/supersu.apk", env->rootfs);
+    if (access(path, F_OK) == 0) {
+        struct stat st;
+        stat(path, &st);
+        printf("[ANV] 📦 SuperSU APK found (%ld bytes)\n", st.st_size);
+    }
+    
+    if (!found) {
+        printf("[ANV] ⚠️  SuperSU not found in environment, installing...\n");
+        return install_supersu(env);
+    }
+    
+    return ANV_OK;
+}
+
+// ============================================================================
+// TÉLÉCHARGEMENT SUPERSU (une seule fois)
 // ============================================================================
 static int supersu_already_downloaded(void) {
     return (access(SUPERSU_PATH, F_OK) == 0);
 }
 
-int anv_check_root(void) {
-    static int root_checked = 0;
-    static int supersu_downloaded = 0;
-    
-    if (geteuid() == 0) {
-        if (!root_checked) {
-            printf("\033[1;31m");
-            printf("\n");
-            printf("  [track backsh >_< root no secure]         \n");
-            printf("  Running as root - checking SuperSU...\n");
-            printf("\n");
-            printf("\033[0m");
-            
-            // Télécharger SuperSU seulement si pas déjà fait
-            if (!supersu_already_downloaded()) {
-                anv_download_supersu();
-                supersu_downloaded = 1;
-            } else {
-                printf("[ANV] ✅ SuperSU already downloaded\n");
-            }
-            root_checked = 1;
-        }
+static int ensure_supersu_downloaded(void) {
+    if (supersu_already_downloaded()) {
+        struct stat st;
+        stat(SUPERSU_PATH, &st);
+        printf("[ANV] ✅ SuperSU already downloaded (%ld bytes)\n", st.st_size);
         return ANV_OK;
     }
-    return ANV_OK;
+    return anv_download_supersu();
 }
 
-// ============================================================================
-// TÉLÉCHARGEMENT SUPERSU (avec vérification)
-// ============================================================================
+int anv_download_supersu(void) {
+    printf("[ANV] Downloading SuperSU for root environments...\n");
+    
+    CURL *curl_handle;
+    CURLcode res = CURLE_OK;
+    struct MemoryStruct chunk;
+    
+    chunk.memory = malloc(1);
+    chunk.size = 0;
+    
+    curl_global_init(CURL_GLOBAL_ALL);
+    curl_handle = curl_easy_init();
+    
+    if(curl_handle) {
+        curl_easy_setopt(curl_handle, CURLOPT_URL, SUPERSU_URL);
+        curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+        curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "ANV-SuperSU/1.0");
+        curl_easy_setopt(curl_handle, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 30L);
+        curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0L);
+        
+        res = curl_easy_perform(curl_handle);
+        
+        if(res == CURLE_OK) {
+            // Créer le répertoire
+            mkdir("/usr/local/share/anv", 0755);
+            
+            // Sauvegarder le fichier
+            FILE *fp = fopen(SUPERSU_PATH, "wb");
+            if(fp) {
+                fwrite(chunk.memory, 1, chunk.size, fp);
+                fclose(fp);
+                chmod(SUPERSU_PATH, 0644);
+                printf("[ANV] ✅ SuperSU downloaded: %s (%zu bytes)\n", 
+                       SUPERSU_PATH, chunk.size);
+            } else {
+                printf("[ANV] ❌ Failed to save SuperSU\n");
+            }
+        } else {
+            printf("[ANV] ❌ Download failed: %s\n", curl_easy_strerror(res));
+        }
+        
+        curl_easy_cleanup(curl_handle);
+        free(chunk.memory);
+    }
+    
+    curl_global_cleanup();
+    return (res == CURLE_OK) ? ANV_OK : ANV_ERR_DOWNLOAD;
+}
+
 static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
     struct MemoryStruct *mem = (struct MemoryStruct *)userp;
@@ -104,60 +193,105 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
     return realsize;
 }
 
-int anv_download_supersu(void) {
-    // Vérifier si déjà téléchargé
-    if (supersu_already_downloaded()) {
-        printf("[ANV] ✅ SuperSU already exists at %s\n", SUPERSU_PATH);
+// ============================================================================
+// INSTALLATION SUPERSU DANS L'ENVIRONNEMENT
+// ============================================================================
+static int install_supersu(anv_env_t *env) {
+    printf("[ANV] 🔐 Installing SuperSU in environment...\n");
+    
+    // S'assurer que SuperSU est téléchargé
+    if (ensure_supersu_downloaded() != ANV_OK) {
+        printf("[ANV] ❌ Cannot install SuperSU - download failed\n");
+        return ANV_ERR_DOWNLOAD;
+    }
+    
+    // Créer les répertoires
+    mkdir_p(env->rootfs, "/system/bin");
+    mkdir_p(env->rootfs, "/system/app/SuperSU");
+    mkdir_p(env->rootfs, "/system/xbin");
+    
+    // Copier l'APK
+    char cmd[MAX_CMD];
+    snprintf(cmd, sizeof(cmd), "cp %s %s/ 2>/dev/null", SUPERSU_PATH, env->rootfs);
+    system(cmd);
+    
+    // Extraire l'APK
+    snprintf(cmd, sizeof(cmd), 
+             "cd %s && unzip -o supersu.apk -d system/ > /dev/null 2>&1", 
+             env->rootfs);
+    system(cmd);
+    
+    // Créer le binaire su
+    char su_path[ANV_PATH_MAX];
+    snprintf(su_path, sizeof(su_path), "%s/system/bin/su", env->rootfs);
+    
+    FILE *f = fopen(su_path, "w");
+    if (f) {
+        fprintf(f, "#!/system/bin/sh\n");
+        fprintf(f, "# SuperSU for ANV environments\n");
+        fprintf(f, "echo '[ANV] SuperSU activated'\n");
+        fprintf(f, "export PATH=/system/bin:/system/xbin:/bin:/sbin:/usr/bin:$PATH\n");
+        fprintf(f, "if [ \"$1\" = \"-c\" ]; then\n");
+        fprintf(f, "    shift\n");
+        fprintf(f, "    sh -c \"$@\"\n");
+        fprintf(f, "elif [ \"$1\" = \"--help\" ] || [ \"$1\" = \"-h\" ]; then\n");
+        fprintf(f, "    echo 'SuperSU for ANV environments'\n");
+        fprintf(f, "    echo 'Usage: su [options] [command]'\n");
+        fprintf(f, "    echo ''\n");
+        fprintf(f, "    echo 'Options:'\n");
+        fprintf(f, "    echo '  -c COMMAND  Run command as root'\n");
+        fprintf(f, "    echo '  -h, --help  Show this help'\n");
+        fprintf(f, "    echo ''\n");
+        fprintf(f, "    echo 'Examples:'\n");
+        fprintf(f, "    echo '  su -c \"apkm install nginx\"'\n");
+        fprintf(f, "    echo '  su'\n");
+        fprintf(f, "else\n");
+        fprintf(f, "    echo '[ANV] SuperSU shell (root privileges)'\n");
+        fprintf(f, "    sh\n");
+        fprintf(f, "fi\n");
+        fclose(f);
+        chmod(su_path, 04755);  // setuid root
+    }
+    
+    // Créer des liens symboliques
+    char link_path[ANV_PATH_MAX];
+    snprintf(link_path, sizeof(link_path), "%s/bin/su", env->rootfs);
+    unlink(link_path);
+    symlink(su_path, link_path);
+    
+    snprintf(link_path, sizeof(link_path), "%s/sbin/su", env->rootfs);
+    unlink(link_path);
+    symlink(su_path, link_path);
+    
+    snprintf(link_path, sizeof(link_path), "%s/system/xbin/su", env->rootfs);
+    unlink(link_path);
+    symlink(su_path, link_path);
+    
+    // Vérifier l'installation
+    return verify_supersu_in_env(env);
+}
+
+// ============================================================================
+// DÉTECTION ROOT
+// ============================================================================
+int anv_check_root(void) {
+    static int root_checked = 0;
+    
+    if (geteuid() == 0) {
+        if (!root_checked) {
+            printf("\033[1;31m");
+            printf("╔════════════════════════════════════════════════════╗\n");
+            printf("║  [track backsh >_< root no secure]               ║\n");
+            printf("║  Running as root - preparing SuperSU...          ║\n");
+            printf("╚════════════════════════════════════════════════════╝\n");
+            printf("\033[0m");
+            
+            ensure_supersu_downloaded();
+            root_checked = 1;
+        }
         return ANV_OK;
     }
-    
-    printf("[ANV] Downloading SuperSU for root environments...\n");
-    
-    CURL *curl_handle;
-    CURLcode res;
-    struct MemoryStruct chunk;
-    
-    chunk.memory = malloc(1);
-    chunk.size = 0;
-    
-    curl_global_init(CURL_GLOBAL_ALL);
-    curl_handle = curl_easy_init();
-    
-    if(curl_handle) {
-        curl_easy_setopt(curl_handle, CURLOPT_URL, SUPERSU_URL);
-        curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-        curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
-        curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "ANV-SuperSU/1.0");
-        curl_easy_setopt(curl_handle, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 30L);
-        
-        res = curl_easy_perform(curl_handle);
-        
-        if(res == CURLE_OK) {
-            // Créer le répertoire
-            mkdir("/usr/local/share/anv", 0755);
-            
-            // Sauvegarder le fichier
-            FILE *fp = fopen(SUPERSU_PATH, "wb");
-            if(fp) {
-                fwrite(chunk.memory, 1, chunk.size, fp);
-                fclose(fp);
-                chmod(SUPERSU_PATH, 0755);
-                printf("[ANV] ✅ SuperSU downloaded: %s (%zu bytes)\n", 
-                       SUPERSU_PATH, chunk.size);
-            } else {
-                printf("[ANV] ❌ Failed to save SuperSU\n");
-            }
-        } else {
-            printf("[ANV] ❌ Download failed: %s\n", curl_easy_strerror(res));
-        }
-        
-        curl_easy_cleanup(curl_handle);
-        free(chunk.memory);
-    }
-    
-    curl_global_cleanup();
-    return (res == CURLE_OK) ? ANV_OK : ANV_ERR_DOWNLOAD;
+    return ANV_OK;
 }
 
 // ============================================================================
@@ -187,18 +321,13 @@ int anv_init(anv_ctx_t *ctx) {
     
     memset(ctx, 0, sizeof(anv_ctx_t));
     
-    // Vérifier root (une seule fois)
     anv_check_root();
-    
-    // Vérifier Docker (une seule fois)
     ctx->docker_available = anv_check_docker();
     
-    // Définir le chemin de base
     const char *home = getenv("HOME");
     if (!home) home = "/tmp";
     snprintf(ctx->base_path, sizeof(ctx->base_path), "%s/.anv", home);
     
-    // Créer le répertoire de base
     mkdir(ctx->base_path, 0755);
     mkdir("/usr/local/share/anv", 0755);
     
@@ -240,7 +369,6 @@ static int mkdir_p(const char *root, const char *path) {
 static int setup_rootfs(anv_env_t *env) {
     snprintf(env->rootfs, sizeof(env->rootfs), "%s/rootfs", env->path);
     
-    // Créer la structure de base
     const char *dirs[] = {
         "bin", "sbin", "usr/bin", "usr/sbin", "usr/lib",
         "etc", "home", "tmp", "var", "proc", "sys", "dev",
@@ -255,7 +383,7 @@ static int setup_rootfs(anv_env_t *env) {
         mkdir(path, 0755);
     }
     
-    // Copier les binaires APKM/APSM/BOOL
+    // Copier les binaires APKM
     const char *apkm_bins[] = {
         "/usr/bin/apkm", "/usr/bin/apsm", "/usr/bin/bool",
         "/bin/sh", "/bin/busybox", "/bin/ls", "/bin/cat",
@@ -277,7 +405,7 @@ static int setup_rootfs(anv_env_t *env) {
         }
     }
     
-    // Créer le fichier de configuration APKM
+    // Config APKM
     char conf_path[ANV_PATH_MAX];
     snprintf(conf_path, sizeof(conf_path), "%s/etc/apkm/repositories.conf", env->rootfs);
     mkdir_p(env->rootfs, "/etc/apkm");
@@ -285,7 +413,6 @@ static int setup_rootfs(anv_env_t *env) {
     FILE *f = fopen(conf_path, "w");
     if (f) {
         fprintf(f, "# APKM Repositories\n");
-        fprintf(f, "# Format: name url [priority]\n");
         fprintf(f, "zarch-hub https://gsql-badge.onrender.com 5\n");
         fclose(f);
     }
@@ -294,130 +421,25 @@ static int setup_rootfs(anv_env_t *env) {
 }
 
 // ============================================================================
-// INSTALLATION SUPERSU DANS L'ENVIRONNEMENT (CORRIGÉE)
-// ============================================================================
-static int install_supersu(anv_env_t *env) {
-    // Vérifier si SuperSU est déjà installé dans cet environnement
-    char check_path[ANV_PATH_MAX];
-    snprintf(check_path, sizeof(check_path), "%s/system/bin/su", env->rootfs);
-    
-    if (access(check_path, F_OK) == 0) {
-        printf("[ANV] 🔐 SuperSU already installed in environment\n");
-        return ANV_OK;
-    }
-    
-    // Vérifier si le fichier SuperSU existe
-    if (access(SUPERSU_PATH, F_OK) != 0) {
-        printf("[ANV] ⚠️ SuperSU not found, downloading...\n");
-        anv_download_supersu();
-    }
-    
-    printf("[ANV] 🔐 Installing SuperSU in environment...\n");
-    
-    char dest_path[ANV_PATH_MAX];
-    snprintf(dest_path, sizeof(dest_path), "%s/system/bin/su", env->rootfs);
-    
-    // Créer les répertoires nécessaires
-    mkdir_p(env->rootfs, "/system/bin");
-    mkdir_p(env->rootfs, "/system/app/SuperSU");
-    
-    // Copier SuperSU
-    if (access(SUPERSU_PATH, F_OK) == 0) {
-        char cmd[MAX_CMD];
-        
-        // Copier l'APK
-        snprintf(cmd, sizeof(cmd), "cp %s %s/ 2>/dev/null", SUPERSU_PATH, env->rootfs);
-        system(cmd);
-        
-        // Extraire l'APK
-        snprintf(cmd, sizeof(cmd), 
-                 "cd %s && unzip -o supersu.apk -d system/ > /dev/null 2>&1", 
-                 env->rootfs);
-        system(cmd);
-        
-        // Vérifier l'extraction
-        printf("[ANV] 📦 SuperSU APK extracted\n");
-    }
-    
-    // Créer le binaire su
-    FILE *f = fopen(dest_path, "w");
-    if (f) {
-        fprintf(f, "#!/system/bin/sh\n");
-        fprintf(f, "# SuperSU wrapper for ANV\n");
-        fprintf(f, "export PATH=/system/bin:$PATH\n");
-        fprintf(f, "if [ \"$1\" = \"-c\" ]; then\n");
-        fprintf(f, "    shift\n");
-        fprintf(f, "    sh -c \"$@\"\n");
-        fprintf(f, "elif [ \"$1\" = \"--help\" ] || [ \"$1\" = \"-h\" ]; then\n");
-        fprintf(f, "    echo 'SuperSU for ANV environments'\n");
-        fprintf(f, "    echo 'Usage: su [options] [command]'\n");
-        fprintf(f, "else\n");
-        fprintf(f, "    sh\n");
-        fprintf(f, "fi\n");
-        fclose(f);
-        chmod(dest_path, 04755);  // setuid root
-    }
-    
-    // Créer un lien symbolique
-    char bin_path[ANV_PATH_MAX];
-    snprintf(bin_path, sizeof(bin_path), "%s/bin/su", env->rootfs);
-    unlink(bin_path);
-    symlink(dest_path, bin_path);
-    
-    // Vérifier l'installation
-    if (access(dest_path, F_OK) == 0) {
-        printf("[ANV] 🔐 SuperSU installed in environment (setuid: %o)\n", 
-               chmod(dest_path, 04755));
-    } else {
-        printf("[ANV] ❌ SuperSU installation failed\n");
-    }
-    
-    return ANV_OK;
-}
-// ============================================================================
-// FONCTION PRINCIPALE POUR LE PROCESSUS ENFANT (PID 1) - CORRIGÉE
+// FONCTION PRINCIPALE DU PROCESSUS ENFANT
 // ============================================================================
 static int child_func(void *arg) {
     anv_env_t *env = (anv_env_t *)arg;
     
-    // Configurer les namespaces
-    int flags = CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWPID;
-    
-    if (unshare(flags) == -1) {
-        perror("unshare");
-        return ANV_ERR_NS;
-    }
-    
-    // Configurer les mounts
-    mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
-    
-    // Monter /proc (nécessaire pour PID 1)
+    // Monter /proc
     char proc_path[ANV_PATH_MAX];
     snprintf(proc_path, sizeof(proc_path), "%s/proc", env->rootfs);
+    mkdir_p(env->rootfs, "/proc");
     mount("proc", proc_path, "proc", 0, NULL);
-    
-    // Monter /sys si nécessaire
-    if (!env->security.no_network) {
-        char sys_path[ANV_PATH_MAX];
-        snprintf(sys_path, sizeof(sys_path), "%s/sys", env->rootfs);
-        mount("sysfs", sys_path, "sysfs", 0, NULL);
-    }
     
     // Monter /dev
     char dev_path[ANV_PATH_MAX];
     snprintf(dev_path, sizeof(dev_path), "%s/dev", env->rootfs);
+    mkdir_p(env->rootfs, "/dev");
     mount("tmpfs", dev_path, "tmpfs", 0, "size=10M");
     
     // Créer les périphériques
     create_devices(env);
-    
-    // Installer NamesBar
-    install_namesbar(env);
-    
-    // Installer SuperSI (une seule fois dans l'environnement)
-    if (geteuid() == 0) {
-        install_supersu(env);
-    }
     
     // Chroot
     if (chroot(env->rootfs) != 0) {
@@ -429,15 +451,23 @@ static int child_func(void *arg) {
     // Set hostname
     sethostname(env->hostname, strlen(env->hostname));
     
-    // Lancer le shell (via namesbar)
+    // Installer NamesBar
+    install_namesbar(env);
+    
+    // Vérifier/installer SuperSU
+    verify_supersu_in_env(env);
+    
+    // Lancer le shell
     printf("\n[ANV] Environment '%s' started (security level %d)\n", 
            env->name, env->security_level);
-    printf("[ANV] Type 'exit' to stop the environment\n\n");
+    printf("[ANV] Type 'exit' to stop the environment\n");
+    printf("[ANV] SuperSU available: try 'su --help'\n\n");
     
     execl("/bin/sh", "sh", NULL);
     
     return ANV_OK;
 }
+
 // ============================================================================
 // API PUBLIQUE - CRÉATION
 // ============================================================================
@@ -465,39 +495,30 @@ int anv_create(anv_ctx_t *ctx, const char *name, int type, int security) {
     snprintf(env.path, sizeof(env.path), "%s/%s", ctx->base_path, name);
     snprintf(env.prompt_prefix, sizeof(env.prompt_prefix), "::%s::", name);
     
-    // Configuration sécurité
     env.security.no_network = (security >= ANV_SEC_HIGH) ? 1 : 0;
     env.security.read_only = (security >= ANV_SEC_MEDIUM) ? 1 : 0;
     env.security.no_new_privs = (security >= ANV_SEC_HIGH) ? 1 : 0;
-    env.security.seccomp = (security >= ANV_SEC_PARANOID) ? 1 : 0;
     
-    // Créer le répertoire
     mkdir(env.path, 0755);
     
-    // Configurer le rootfs
     if (setup_rootfs(&env) != ANV_OK) {
         printf("❌ Rootfs creation failed\n");
         return ANV_ERR_MOUNT;
     }
     
-    // Sauvegarder la configuration
     save_env_config(&env);
     
     printf("✅ Environment created: %s\n", env.rootfs);
     printf("   Security level: %d\n", security);
     printf("   NamesBar: %s\n", ANV_NAMESBAR);
-    if (env.docker_enabled) {
-        printf("   Docker: ✅ Available\n");
-    }
     
     return ANV_OK;
 }
 
 // ============================================================================
-// API PUBLIQUE - DÉMARRAGE (CORRIGÉ)
+// API PUBLIQUE - DÉMARRAGE (version avec fork)
 // ============================================================================
 int anv_start(anv_ctx_t *ctx, const char *name) {
-    // Ne pas re-vérifier root ici
     printf("🚀 Starting environment: %s\n", name);
     
     anv_env_t env;
@@ -506,45 +527,64 @@ int anv_start(anv_ctx_t *ctx, const char *name) {
         return ANV_ERR_NOENV;
     }
     
-    // Vérifier si déjà démarré
     char pid_path[ANV_PATH_MAX];
     snprintf(pid_path, sizeof(pid_path), "%s/%s/pid", ctx->base_path, name);
+    
     if (access(pid_path, F_OK) == 0) {
-        printf("⚠️  Environment already running\n");
+        FILE *f = fopen(pid_path, "r");
+        if (f) {
+            pid_t old_pid;
+            fscanf(f, "%d", &old_pid);
+            fclose(f);
+            if (kill(old_pid, 0) == 0) {
+                printf("⚠️  Environment already running (PID %d)\n", old_pid);
+                return ANV_OK;
+            }
+            unlink(pid_path);
+        }
+    }
+    
+    // Utiliser fork + unshare au lieu de clone
+    pid_t pid = fork();
+    
+    if (pid == 0) {
+        // Processus fils
+        if (unshare(CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWPID) == -1) {
+            perror("unshare");
+            exit(1);
+        }
+        
+        // Monter /proc pour le nouveau PID namespace
+        mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
+        
+        child_func(&env);
+        exit(0);
+    }
+    else if (pid > 0) {
+        // Processus père
+        sleep(1); // Attendre que le fils s'initialise
+        
+        env.init_pid = pid;
+        env.is_running = 1;
+        
+        printf("✅ Environment started with PID: %d\n", pid);
+        printf("   NamesBar: %s\n", ANV_NAMESBAR);
+        
+        save_env_pid(&env);
         return ANV_OK;
     }
-    
-    // Stack pour clone
-    static char stack[STACK_SIZE];
-    void *stack_top = stack + STACK_SIZE;
-    
-    // Flags pour clone (simplifiés)
-    int flags = SIGCHLD | CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC;
-    
-    // Créer le processus fils
-    pid_t pid = clone(child_func, stack_top, flags, &env);
-    
-    if (pid == -1) {
-        perror("clone");
+    else {
+        perror("fork");
         return ANV_ERR_NS;
     }
-    
-    env.init_pid = pid;
-    env.is_running = 1;
-    
-    printf("✅ Environment started with PID: %d (PID 1 in namespace)\n", pid);
-    printf("   NamesBar: %s\n", ANV_NAMESBAR);
-    
-    // Sauvegarder le PID
-    save_env_pid(&env);
-    
-    return ANV_OK;
 }
 
 // ============================================================================
 // API PUBLIQUE - ENTRER
 // ============================================================================
 int anv_enter(anv_ctx_t *ctx, const char *name, char *const argv[]) {
+    (void)argv; // Ignorer
+    
     char pid_path[ANV_PATH_MAX];
     snprintf(pid_path, sizeof(pid_path), "%s/%s/pid", ctx->base_path, name);
     
@@ -558,7 +598,6 @@ int anv_enter(anv_ctx_t *ctx, const char *name, char *const argv[]) {
     fscanf(f, "%d", &pid);
     fclose(f);
     
-    // Vérifier si l'option -C est supportée
     int has_cgroup = check_nsenter_support();
     
     char cmd[MAX_CMD];
@@ -576,7 +615,7 @@ int anv_enter(anv_ctx_t *ctx, const char *name, char *const argv[]) {
     
     printf("🔐 Entering environment %s\n", name);
     printf("   NamesBar active: %s\n", ANV_NAMESBAR);
-    printf("   APKM/APSM/BOOL tools available\n");
+    printf("   SuperSU: try 'su --help'\n");
     printf("   Type 'exit' to leave\n\n");
     
     system(cmd);
@@ -601,7 +640,6 @@ int anv_stop(anv_ctx_t *ctx, const char *name) {
     fscanf(f, "%d", &pid);
     fclose(f);
     
-    // Tuer le processus
     kill(pid, SIGTERM);
     sleep(1);
     kill(pid, SIGKILL);
@@ -609,8 +647,40 @@ int anv_stop(anv_ctx_t *ctx, const char *name) {
     unlink(pid_path);
     
     printf("✅ Environment '%s' stopped\n", name);
-    
     return ANV_OK;
+}
+
+// ============================================================================
+// API PUBLIQUE - SUPPRESSION
+// ============================================================================
+int anv_delete(anv_ctx_t *ctx, const char *name) {
+    char env_path[ANV_PATH_MAX];
+    snprintf(env_path, sizeof(env_path), "%s/%s", ctx->base_path, name);
+    
+    if (access(env_path, F_OK) != 0) {
+        printf("❌ Environment '%s' not found\n", name);
+        return ANV_ERR_NOENV;
+    }
+    
+    char pid_path[ANV_PATH_MAX];
+    snprintf(pid_path, sizeof(pid_path), "%s/pid", env_path);
+    if (access(pid_path, F_OK) == 0) {
+        printf("⚠️  Environment is still running. Stopping first...\n");
+        anv_stop(ctx, name);
+        sleep(1);
+    }
+    
+    char cmd[MAX_CMD];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", env_path);
+    int ret = system(cmd);
+    
+    if (ret == 0) {
+        printf("✅ Environment '%s' deleted\n", name);
+        return ANV_OK;
+    } else {
+        printf("❌ Failed to delete environment '%s'\n", name);
+        return ANV_ERR_NOENV;
+    }
 }
 
 // ============================================================================
@@ -638,12 +708,10 @@ int anv_list(anv_ctx_t *ctx) {
             continue;
         }
         
-        // Vérifier si en cours
         char pid_path[ANV_PATH_MAX];
         snprintf(pid_path, sizeof(pid_path), "%s/%s/pid", ctx->base_path, entry->d_name);
         int running = (access(pid_path, F_OK) == 0);
         
-        // Formater la date
         char date_str[32] = "";
         if (env.created > 0) {
             struct tm *tm = localtime(&env.created);
@@ -670,7 +738,7 @@ int anv_list(anv_ctx_t *ctx) {
 }
 
 // ============================================================================
-// FONCTIONS UTILITAIRES (inchangées)
+// FONCTIONS UTILITAIRES
 // ============================================================================
 static int check_nsenter_support(void) {
     FILE *fp = popen("nsenter --help 2>&1 | grep -c '\\-C'", "r");
@@ -728,7 +796,7 @@ static int install_namesbar(anv_env_t *env) {
     fprintf(f, "export APKM_REPO='https://gsql-badge.onrender.com'\n");
     fprintf(f, "if [ -f /system/bin/su ]; then\n");
     fprintf(f, "    export PATH=/system/bin:$PATH\n");
-    fprintf(f, "    echo '[ANV] SuperSU available'\n");
+    fprintf(f, "    echo '[ANV] SuperSU available (try su --help)'\n");
     fprintf(f, "fi\n");
     fprintf(f, "echo '[ANV] Environment: %s (security level %d)'\n", 
             env->name, env->security_level);
@@ -737,7 +805,6 @@ static int install_namesbar(anv_env_t *env) {
     fclose(f);
     chmod(namesbar_path, 0755);
     
-    // Remplacer /bin/sh par namesbar
     char sh_path[ANV_PATH_MAX];
     snprintf(sh_path, sizeof(sh_path), "%s/bin/sh", env->rootfs);
     unlink(sh_path);
@@ -756,7 +823,7 @@ static int save_env_config(anv_env_t *env) {
     fprintf(f, "ANV_ENV=%s\n", env->name);
     fprintf(f, "TYPE=%d\n", env->type);
     fprintf(f, "SECURITY_LEVEL=%d\n", env->security_level);
-    fprintf(f, "CREATED=%ld\n", env->created);
+    fprintf(f, "CREATED=%lld\n", (long long)env->created);
     fprintf(f, "HOST_UID=%d\n", env->host_uid);
     fprintf(f, "HOST_GID=%d\n", env->host_gid);
     fprintf(f, "DOCKER_ENABLED=%d\n", env->docker_enabled);
@@ -792,7 +859,6 @@ static int load_env_config(anv_ctx_t *ctx, const char *name, anv_env_t *env) {
     }
     fclose(f);
     
-    // Lire le PID si existe
     char pid_path[ANV_PATH_MAX];
     snprintf(pid_path, sizeof(pid_path), "%s/pid", env->path);
     f = fopen(pid_path, "r");
@@ -817,42 +883,9 @@ static int save_env_pid(anv_env_t *env) {
     
     return ANV_OK;
 }
+
 // ============================================================================
-// API PUBLIQUE - SUPPRESSION
-// ============================================================================
-int anv_delete(anv_ctx_t *ctx, const char *name) {
-    char env_path[ANV_PATH_MAX];
-    snprintf(env_path, sizeof(env_path), "%s/%s", ctx->base_path, name);
-    
-    if (access(env_path, F_OK) != 0) {
-        printf("❌ Environment '%s' not found\n", name);
-        return ANV_ERR_NOENV;
-    }
-    
-    // Vérifier s'il tourne
-    char pid_path[ANV_PATH_MAX];
-    snprintf(pid_path, sizeof(pid_path), "%s/pid", env_path);
-    if (access(pid_path, F_OK) == 0) {
-        printf("⚠️  Environment is still running. Stopping first...\n");
-        anv_stop(ctx, name);
-        sleep(1); // Attendre que le processus soit bien tué
-    }
-    
-    // Supprimer
-    char cmd[MAX_CMD];
-    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", env_path);
-    int ret = system(cmd);
-    
-    if (ret == 0) {
-        printf("✅ Environment '%s' deleted\n", name);
-        return ANV_OK;
-    } else {
-        printf("❌ Failed to delete environment '%s'\n", name);
-        return ANV_ERR_NOENV;
-    }
-}
-// ============================================================================
-// MAIN - CLI (À AJOUTER À LA FIN DU FICHIER)
+// MAIN
 // ============================================================================
 void print_usage(void) {
     printf("\n");
