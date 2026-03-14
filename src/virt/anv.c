@@ -23,7 +23,7 @@
 // CONSTANTES
 // ============================================================================
 #define SUPERSU_URL "https://supersuroot.org/downloads/supersu-2-82.apk"
-#define SUPERSU_PATH "/usr/local/share/anv/supersu.apk"
+#define SUPERSU_GLOBAL "/usr/local/share/anv/supersu.apk"
 #define DOCKER_CHECK "docker --version > /dev/null 2>&1"
 #define MAX_CMD 4096
 #define STACK_SIZE (8 * 1024 * 1024)
@@ -57,86 +57,75 @@ static int child_process(anv_env_t *env);
 static double time_execution(struct timeval start, struct timeval end);
 
 // ============================================================================
-// FICHIER DE LOG
-// ============================================================================
-static FILE *log_file = NULL;
-
-static void debug_log(const char *format, ...) {
-    if (!log_file) {
-        log_file = fopen("/tmp/anv-debug.log", "a");
-    }
-    if (log_file) {
-        va_list args;
-        va_start(args, format);
-        vfprintf(log_file, format, args);
-        fprintf(log_file, "\n");
-        fflush(log_file);
-        va_end(args);
-    }
-}
-
-// ============================================================================
 // VÉRIFICATION SUPERSU DANS L'ENVIRONNEMENT
 // ============================================================================
 static int verify_supersu_in_env(anv_env_t *env) {
-    debug_log("verify_supersu_in_env: checking locations");
     int found = 0;
     char path[ANV_PATH_MAX];
     
+    // Vérifier dans les chemins de l'environnement
     const char *locations[] = {
         "/system/bin/su",
+        "/system/xbin/su",
         "/bin/su",
         "/sbin/su",
         "/usr/bin/su",
-        "/system/xbin/su",
         NULL
     };
     
+    printf("[ANV] 🔍 Checking SuperSU in environment...\n");
+    
     for (int i = 0; locations[i]; i++) {
         snprintf(path, sizeof(path), "%s%s", env->rootfs, locations[i]);
-        debug_log("verify_supersu_in_env: checking %s", path);
         if (access(path, F_OK) == 0) {
             struct stat st;
             stat(path, &st);
-            debug_log("verify_supersu_in_env: found at %s, mode=%o", locations[i], st.st_mode);
+            printf("[ANV] ✅ SuperSU found at %s\n", locations[i]);
             
             if (!(st.st_mode & S_ISUID)) {
-                debug_log("verify_supersu_in_env: fixing setuid bit");
+                printf("[ANV] 🔧 Fixing setuid bit on %s\n", locations[i]);
                 chmod(path, 04755);
             }
             found = 1;
         }
     }
     
+    // Vérifier aussi l'APK dans l'environnement
+    snprintf(path, sizeof(path), "%s/supersu.apk", env->rootfs);
+    if (access(path, F_OK) == 0) {
+        struct stat st;
+        stat(path, &st);
+        printf("[ANV] 📦 SuperSU APK found in environment (%ld bytes)\n", st.st_size);
+    }
+    
     if (!found) {
-        debug_log("verify_supersu_in_env: not found, installing");
+        printf("[ANV] ⚠️ SuperSU not found in environment, installing...\n");
         return install_supersu(env);
     }
     
-    debug_log("verify_supersu_in_env: success");
     return ANV_OK;
 }
 
 // ============================================================================
-// TÉLÉCHARGEMENT SUPERSU
+// TÉLÉCHARGEMENT SUPERSU (global)
 // ============================================================================
 static int supersu_already_downloaded(void) {
-    int exists = (access(SUPERSU_PATH, F_OK) == 0);
-    debug_log("supersu_already_downloaded: %d", exists);
-    return exists;
+    return (access(SUPERSU_GLOBAL, F_OK) == 0);
 }
 
 static int ensure_supersu_downloaded(void) {
-    debug_log("ensure_supersu_downloaded: checking");
     if (supersu_already_downloaded()) {
+        struct stat st;
+        stat(SUPERSU_GLOBAL, &st);
+        printf("[ANV] ✅ SuperSU already downloaded globally (%ld bytes)\n", st.st_size);
         return ANV_OK;
     }
-    debug_log("ensure_supersu_downloaded: downloading");
     return anv_download_supersu();
 }
 
 int anv_download_supersu(void) {
-    debug_log("anv_download_supersu: starting download");
+    printf("[ANV] Downloading SuperSU globally...\n");
+    
     CURL *curl_handle;
     CURLcode res = CURLE_OK;
     struct MemoryStruct chunk;
@@ -162,17 +151,18 @@ int anv_download_supersu(void) {
         if(res == CURLE_OK) {
             mkdir("/usr/local/share/anv", 0755);
             
-            FILE *fp = fopen(SUPERSU_PATH, "wb");
+            FILE *fp = fopen(SUPERSU_GLOBAL, "wb");
             if(fp) {
                 fwrite(chunk.memory, 1, chunk.size, fp);
                 fclose(fp);
-                chmod(SUPERSU_PATH, 0644);
-                debug_log("anv_download_supersu: download successful, %zu bytes", chunk.size);
+                chmod(SUPERSU_GLOBAL, 0644);
+                printf("[ANV] ✅ SuperSU downloaded globally: %s (%zu bytes)\n", 
+                       SUPERSU_GLOBAL, chunk.size);
             } else {
-                debug_log("anv_download_supersu: failed to save file");
+                printf("[ANV] ❌ Failed to save SuperSU globally\n");
             }
         } else {
-            debug_log("anv_download_supersu: curl error: %s", curl_easy_strerror(res));
+            printf("[ANV] ❌ Download failed: %s\n", curl_easy_strerror(res));
         }
         
         curl_easy_cleanup(curl_handle);
@@ -201,67 +191,108 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 }
 
 // ============================================================================
-// INSTALLATION SUPERSU
+// INSTALLATION SUPERSU DANS L'ENVIRONNEMENT
 // ============================================================================
 static int install_supersu(anv_env_t *env) {
-    debug_log("install_supersu: starting installation");
+    printf("[ANV] 🔐 Installing SuperSU in environment %s...\n", env->name);
+    
     if (ensure_supersu_downloaded() != ANV_OK) {
-        debug_log("install_supersu: download failed");
+        printf("[ANV] ❌ Cannot install SuperSU - global download failed\n");
         return ANV_ERR_DOWNLOAD;
     }
     
-    mkdir_p(env->rootfs, "/system/bin");
-    mkdir_p(env->rootfs, "/system/app/SuperSU");
-    mkdir_p(env->rootfs, "/system/xbin");
+    // Créer les répertoires dans l'environnement
+    char path[ANV_PATH_MAX];
+    snprintf(path, sizeof(path), "%s/system", env->rootfs);
+    mkdir(path, 0755);
     
+    snprintf(path, sizeof(path), "%s/system/bin", env->rootfs);
+    mkdir(path, 0755);
+    
+    snprintf(path, sizeof(path), "%s/system/xbin", env->rootfs);
+    mkdir(path, 0755);
+    
+    snprintf(path, sizeof(path), "%s/system/app", env->rootfs);
+    mkdir(path, 0755);
+    
+    snprintf(path, sizeof(path), "%s/system/app/SuperSU", env->rootfs);
+    mkdir(path, 0755);
+    
+    // Copier l'APK global dans l'environnement
     char cmd[MAX_CMD];
-    snprintf(cmd, sizeof(cmd), "cp %s %s/ 2>/dev/null", SUPERSU_PATH, env->rootfs);
-    debug_log("install_supersu: running %s", cmd);
+    snprintf(cmd, sizeof(cmd), "cp %s %s/supersu.apk", SUPERSU_GLOBAL, env->rootfs);
+    printf("[ANV] 📦 Copying SuperSU APK to environment...\n");
     system(cmd);
     
+    // Extraire l'APK dans system/
     snprintf(cmd, sizeof(cmd), 
              "cd %s && unzip -o supersu.apk -d system/ > /dev/null 2>&1", 
              env->rootfs);
-    debug_log("install_supersu: running %s", cmd);
+    printf("[ANV] 📦 Extracting SuperSU in environment...\n");
     system(cmd);
     
+    // Créer le wrapper su dans system/bin/
     char su_path[ANV_PATH_MAX];
     snprintf(su_path, sizeof(su_path), "%s/system/bin/su", env->rootfs);
-    debug_log("install_supersu: creating su at %s", su_path);
     
     FILE *f = fopen(su_path, "w");
     if (f) {
         fprintf(f, "#!/system/bin/sh\n");
-        fprintf(f, "# SuperSU for ANV environments\n");
+        fprintf(f, "# SuperSU for ANV environment: %s\n", env->name);
+        fprintf(f, "echo ''\n");
+        fprintf(f, "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'\n");
+        fprintf(f, "echo '  🔐 SuperSU - Root privileges for %s'\n", env->name);
+        fprintf(f, "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'\n");
+        fprintf(f, "echo ''\n");
         fprintf(f, "export PATH=/system/bin:/system/xbin:/bin:/sbin:/usr/bin:$PATH\n");
         fprintf(f, "if [ \"$1\" = \"-c\" ]; then\n");
         fprintf(f, "    shift\n");
+        fprintf(f, "    echo '[ANV] Executing command as root:' $@\n");
         fprintf(f, "    sh -c \"$@\"\n");
-        fprintf(f, "elif [ \"$1\" = \"--help\" ] || [ \"$1\" = \"-h\" ]; then\n");
-        fprintf(f, "    echo 'SuperSU for ANV environments'\n");
+        fprintf(f, "elif [ \"$1\" = \"--help\" ] || [ \"$1\" = \"-h\" ] || [ $# -eq 0 ]; then\n");
         fprintf(f, "    echo 'Usage: su [options] [command]'\n");
+        fprintf(f, "    echo ''\n");
+        fprintf(f, "    echo 'Options:'\n");
+        fprintf(f, "    echo '  -c COMMAND  Run command as root'\n");
+        fprintf(f, "    echo '  -h, --help  Show this help'\n");
+        fprintf(f, "    echo ''\n");
+        fprintf(f, "    echo 'Examples:'\n");
+        fprintf(f, "    echo '  su -c \"apkm install nginx\"'\n");
+        fprintf(f, "    echo '  su'\n");
         fprintf(f, "else\n");
+        fprintf(f, "    echo '[ANV] SuperSU shell (root privileges) for %s'\n", env->name);
         fprintf(f, "    sh\n");
         fprintf(f, "fi\n");
+        fprintf(f, "echo '[ANV] SuperSU session ended'\n");
         fclose(f);
-        chmod(su_path, 04755);
-        debug_log("install_supersu: su created and setuid set");
+        chmod(su_path, 04755);  // setuid root
+        printf("[ANV] 🔐 SuperSU wrapper created at %s (setuid)\n", su_path);
     }
     
+    // Créer des liens symboliques dans les autres répertoires
     char link_path[ANV_PATH_MAX];
+    
     snprintf(link_path, sizeof(link_path), "%s/bin/su", env->rootfs);
     unlink(link_path);
-    symlink(su_path, link_path);
+    symlink("/system/bin/su", link_path);
     
     snprintf(link_path, sizeof(link_path), "%s/sbin/su", env->rootfs);
     unlink(link_path);
-    symlink(su_path, link_path);
+    symlink("/system/bin/su", link_path);
+    
+    snprintf(link_path, sizeof(link_path), "%s/usr/bin/su", env->rootfs);
+    unlink(link_path);
+    symlink("/system/bin/su", link_path);
     
     snprintf(link_path, sizeof(link_path), "%s/system/xbin/su", env->rootfs);
     unlink(link_path);
-    symlink(su_path, link_path);
+    symlink("/system/bin/su", link_path);
     
-    debug_log("install_supersu: done");
+    printf("[ANV] ✅ SuperSU installed in environment %s\n", env->name);
+    
+    // Vérifier l'installation
+    verify_supersu_in_env(env);
+    
     return ANV_OK;
 }
 
@@ -279,9 +310,7 @@ int anv_check_root(void) {
             printf("║  Running as root - preparing SuperSU...          ║\n");
             printf("╚════════════════════════════════════════════════════╝\n");
             printf("\033[0m");
-            fflush(stdout);
             
-            debug_log("anv_check_root: root detected");
             ensure_supersu_downloaded();
             root_checked = 1;
         }
@@ -299,7 +328,9 @@ int anv_check_docker(void) {
     
     if (!docker_checked) {
         docker_available = (system(DOCKER_CHECK) == 0);
-        debug_log("anv_check_docker: available=%d", docker_available);
+        if (docker_available) {
+            printf("[ANV] 🐳 Docker detected - enabling container support\n");
+        }
         docker_checked = 1;
     }
     return docker_available;
@@ -314,7 +345,6 @@ int anv_init(anv_ctx_t *ctx) {
     if (initialized) return ANV_OK;
     
     memset(ctx, 0, sizeof(anv_ctx_t));
-    debug_log("anv_init: starting");
     
     anv_check_root();
     ctx->docker_available = anv_check_docker();
@@ -330,7 +360,6 @@ int anv_init(anv_ctx_t *ctx) {
     ctx->verbose = 0;
     initialized = 1;
     
-    debug_log("anv_init: done, base_path=%s", ctx->base_path);
     return ANV_OK;
 }
 
@@ -356,13 +385,12 @@ static int mkdir_p(const char *root, const char *path) {
 
 static int setup_rootfs(anv_env_t *env) {
     snprintf(env->rootfs, sizeof(env->rootfs), "%s/rootfs", env->path);
-    debug_log("setup_rootfs: creating at %s", env->rootfs);
     
     const char *dirs[] = {
         "bin", "sbin", "usr/bin", "usr/sbin", "usr/lib",
         "etc", "home", "tmp", "var", "proc", "sys", "dev",
         "run", "mnt", "media", "opt", "srv", "root",
-        "system/bin", "system/app", "system/xbin",
+        "system", "system/bin", "system/app", "system/xbin",
         NULL
     };
     
@@ -370,7 +398,6 @@ static int setup_rootfs(anv_env_t *env) {
         char path[ANV_PATH_MAX];
         snprintf(path, sizeof(path), "%s/%s", env->rootfs, dirs[i]);
         mkdir(path, 0755);
-        debug_log("setup_rootfs: created %s", path);
     }
     
     const char *apkm_bins[] = {
@@ -390,7 +417,6 @@ static int setup_rootfs(anv_env_t *env) {
             
             char cmd[1024];
             snprintf(cmd, sizeof(cmd), "cp %s %s 2>/dev/null", apkm_bins[i], dest);
-            debug_log("setup_rootfs: copying %s to %s", apkm_bins[i], dest);
             system(cmd);
         }
     }
@@ -404,7 +430,35 @@ static int setup_rootfs(anv_env_t *env) {
         fprintf(f, "# APKM Repositories\n");
         fprintf(f, "zarch-hub https://gsql-badge.onrender.com 5\n");
         fclose(f);
-        debug_log("setup_rootfs: created APKM config at %s", conf_path);
+    }
+    
+    return ANV_OK;
+}
+
+// ============================================================================
+// CONFIGURATION DOCKER DANS L'ENVIRONNEMENT
+// ============================================================================
+static int setup_docker_in_env(anv_env_t *env) {
+    printf("[ANV] 🐳 Setting up Docker in environment %s...\n", env->name);
+    
+    // Créer le répertoire pour le socket Docker
+    char docker_path[ANV_PATH_MAX];
+    snprintf(docker_path, sizeof(docker_path), "%s/var/run", env->rootfs);
+    mkdir(docker_path, 0755);
+    
+    // Créer un script wrapper pour docker
+    char docker_wrapper[ANV_PATH_MAX];
+    snprintf(docker_wrapper, sizeof(docker_wrapper), "%s/usr/bin/docker", env->rootfs);
+    
+    FILE *f = fopen(docker_wrapper, "w");
+    if (f) {
+        fprintf(f, "#!/bin/sh\n");
+        fprintf(f, "# Docker wrapper for ANV environment: %s\n", env->name);
+        fprintf(f, "echo '[ANV] 🐳 Docker command forwarded to host'\n");
+        fprintf(f, "nsenter -t 1 -m -u -n docker \"$@\"\n");
+        fclose(f);
+        chmod(docker_wrapper, 0755);
+        printf("[ANV] 🐳 Docker wrapper created\n");
     }
     
     return ANV_OK;
@@ -414,80 +468,62 @@ static int setup_rootfs(anv_env_t *env) {
 // FONCTION DU PROCESSUS ENFANT
 // ============================================================================
 static int child_process(anv_env_t *env) {
-    debug_log("child_process: started with PID %d", getpid());
-    
     // Créer les namespaces
-    debug_log("child_process: creating namespaces");
     if (unshare(CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWPID) == -1) {
-        debug_log("child_process: unshare failed: %s", strerror(errno));
         return 1;
     }
-    debug_log("child_process: namespaces created");
     
     // Configurer les mounts
-    debug_log("child_process: setting mount propagation private");
     mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
     
     // Monter /proc
     char proc_path[ANV_PATH_MAX];
     snprintf(proc_path, sizeof(proc_path), "%s/proc", env->rootfs);
     mkdir_p(env->rootfs, "/proc");
-    debug_log("child_process: mounting proc at %s", proc_path);
-    if (mount("proc", proc_path, "proc", 0, NULL) == -1) {
-        debug_log("child_process: mount proc failed: %s", strerror(errno));
-    }
+    mount("proc", proc_path, "proc", 0, NULL);
     
     // Monter /dev
     char dev_path[ANV_PATH_MAX];
     snprintf(dev_path, sizeof(dev_path), "%s/dev", env->rootfs);
     mkdir_p(env->rootfs, "/dev");
-    debug_log("child_process: mounting dev at %s", dev_path);
-    if (mount("tmpfs", dev_path, "tmpfs", 0, "size=10M") == -1) {
-        debug_log("child_process: mount dev failed: %s", strerror(errno));
-    }
+    mount("tmpfs", dev_path, "tmpfs", 0, "size=10M");
     
     // Créer les périphériques
-    debug_log("child_process: creating devices");
     create_devices(env);
     
+    // Configurer Docker si demandé
+    if (env->type == 3) {  // CUSTOM type pour Docker
+        setup_docker_in_env(env);
+    }
+    
     // Chroot
-    debug_log("child_process: chroot to %s", env->rootfs);
     if (chroot(env->rootfs) != 0) {
-        debug_log("child_process: chroot failed: %s", strerror(errno));
         return 1;
     }
     chdir("/");
-    debug_log("child_process: chroot successful");
     
     // Set hostname
     sethostname(env->hostname, strlen(env->hostname));
-    debug_log("child_process: hostname set to %s", env->hostname);
     
     // Installer NamesBar
-    debug_log("child_process: installing NamesBar");
     install_namesbar(env);
     
-    // Installer SuperSU
-    debug_log("child_process: installing SuperSU");
-    install_supersu(env);
+    // Installer SuperSU dans l'environnement (root seulement)
+    if (geteuid() == 0) {
+        install_supersu(env);
+    }
     
     // Créer un fichier pour signaler que le processus est prêt
     char ready_path[ANV_PATH_MAX];
     snprintf(ready_path, sizeof(ready_path), "%s/ready", env->path);
-    debug_log("child_process: creating ready file at %s", ready_path);
     FILE *f = fopen(ready_path, "w");
     if (f) {
         fprintf(f, "%d", getpid());
         fclose(f);
-        debug_log("child_process: ready file created");
-    } else {
-        debug_log("child_process: failed to create ready file: %s", strerror(errno));
     }
     
     // Lancer le shell
-    debug_log("child_process: launching shell");
     execl("/bin/sh", "sh", NULL);
-    debug_log("child_process: execl failed: %s", strerror(errno));
     return 1;
 }
 
@@ -499,8 +535,8 @@ int anv_create(anv_ctx_t *ctx, const char *name, int type, int security) {
     printf("   Type: %s\n", 
            type == ANV_TYPE_APKM ? "APKM" :
            type == ANV_TYPE_BOOL ? "BOOL" :
-           type == ANV_TYPE_APSM ? "APSM" : "CUSTOM");
-    fflush(stdout);
+           type == ANV_TYPE_APSM ? "APSM" : 
+           type == 3 ? "CUSTOM (Docker)" : "CUSTOM");
     
     anv_env_t env;
     memset(&env, 0, sizeof(env));
@@ -513,7 +549,7 @@ int anv_create(anv_ctx_t *ctx, const char *name, int type, int security) {
     env.created = time(NULL);
     env.last_used = env.created;
     env.is_running = 0;
-    env.docker_enabled = ctx->docker_available;
+    env.docker_enabled = (type == 3) ? 1 : ctx->docker_available;
     
     snprintf(env.hostname, sizeof(env.hostname), "anv-%s", name);
     snprintf(env.path, sizeof(env.path), "%s/%s", ctx->base_path, name);
@@ -535,7 +571,6 @@ int anv_create(anv_ctx_t *ctx, const char *name, int type, int security) {
     printf("✅ Environment created: %s\n", env.rootfs);
     printf("   Security level: %d\n", security);
     printf("   NamesBar: %s\n", ANV_NAMESBAR);
-    fflush(stdout);
     
     return ANV_OK;
 }
@@ -546,15 +581,12 @@ int anv_create(anv_ctx_t *ctx, const char *name, int type, int security) {
 int anv_start(anv_ctx_t *ctx, const char *name) {
     printf("🚀 Starting environment: %s\n", name);
     fflush(stdout);
-    debug_log("anv_start: starting %s", name);
     
     anv_env_t env;
     if (load_env_config(ctx, name, &env) != ANV_OK) {
         printf("❌ Environment '%s' not found\n", name);
-        debug_log("anv_start: environment not found");
         return ANV_ERR_NOENV;
     }
-    debug_log("anv_start: loaded config for %s, rootfs=%s", name, env.rootfs);
     
     char pid_path[ANV_PATH_MAX];
     snprintf(pid_path, sizeof(pid_path), "%s/%s/pid", ctx->base_path, name);
@@ -565,48 +597,32 @@ int anv_start(anv_ctx_t *ctx, const char *name) {
     // Nettoyer les anciens fichiers
     unlink(pid_path);
     unlink(ready_path);
-    debug_log("anv_start: cleaned old files");
     
     pid_t pid = fork();
-    debug_log("anv_start: fork returned %d", pid);
     
     if (pid == -1) {
         perror("fork");
-        debug_log("anv_start: fork failed: %s", strerror(errno));
         return ANV_ERR_NS;
     }
     
     if (pid == 0) {
         // Processus fils
-        debug_log("anv_start: in child process");
         int ret = child_process(&env);
-        debug_log("anv_start: child process exiting with %d", ret);
         exit(ret);
     }
     
-    // Processus père
-    debug_log("anv_start: waiting for child %d to create ready file", pid);
-    
-    // Attendre que le fichier ready soit créé (avec timeout de 10s pour sécurité)
+    // Attendre que le fichier ready soit créé (max 5 secondes)
     int waited = 0;
-    while (waited < 100) { // 10 secondes max (100 * 100ms)
+    while (waited < 50) { // 5 secondes max (50 * 100ms)
         if (access(ready_path, F_OK) == 0) {
-            debug_log("anv_start: ready file found after %dms", waited * 100);
             break;
         }
         usleep(100000); // 100ms
         waited++;
     }
     
-    if (waited >= 100) {
-        debug_log("anv_start: TIMEOUT waiting for ready file");
-        printf("⚠️  Timeout waiting for child process\n");
-    }
-    
     // Vérifier si le processus existe toujours
     if (kill(pid, 0) == 0) {
-        debug_log("anv_start: child process %d is alive", pid);
-        
         // Sauvegarder le PID
         env.init_pid = pid;
         env.is_running = 1;
@@ -615,7 +631,6 @@ int anv_start(anv_ctx_t *ctx, const char *name) {
         if (f) {
             fprintf(f, "%d", pid);
             fclose(f);
-            debug_log("anv_start: saved PID to %s", pid_path);
         }
         
         printf("✅ Environment started with PID: %d\n", pid);
@@ -623,7 +638,6 @@ int anv_start(anv_ctx_t *ctx, const char *name) {
         printf("   To enter: anv enter %s\n", name);
         fflush(stdout);
     } else {
-        debug_log("anv_start: child process %d is dead", pid);
         printf("❌ Child process died during initialization\n");
         return ANV_ERR_NS;
     }
@@ -682,6 +696,10 @@ int anv_enter(anv_ctx_t *ctx, const char *name, char *const argv[]) {
     
     printf("🔐 Entering environment %s\n", name);
     printf("   NamesBar active: %s\n", ANV_NAMESBAR);
+    printf("   SuperSU: try 'su --help'\n");
+    if (access("/usr/bin/docker", F_OK) == 0) {
+        printf("   Docker: try 'docker ps'\n");
+    }
     printf("   Type 'exit' to leave\n\n");
     fflush(stdout);
     
@@ -800,7 +818,8 @@ int anv_list(anv_ctx_t *ctx) {
         
         const char *type_str = env.type == 0 ? "APKM" : 
                               env.type == 1 ? "BOOL" :
-                              env.type == 2 ? "APSM" : "CUSTOM";
+                              env.type == 2 ? "APSM" : 
+                              env.type == 3 ? "DOCKER" : "CUSTOM";
         
         printf(" %-20s %-10s %-12s %-10d %-12d %s\n",
                env.name,
@@ -835,7 +854,6 @@ static int check_nsenter_support(void) {
 }
 
 static int create_devices(anv_env_t *env) {
-    debug_log("create_devices: creating device nodes");
     char dev_path[ANV_PATH_MAX];
     snprintf(dev_path, sizeof(dev_path), "%s/dev", env->rootfs);
     
@@ -843,7 +861,6 @@ static int create_devices(anv_env_t *env) {
     
     snprintf(path, sizeof(path), "%s/null", dev_path);
     mknod(path, S_IFCHR | 0666, makedev(1, 3));
-    debug_log("create_devices: created %s", path);
     
     snprintf(path, sizeof(path), "%s/zero", dev_path);
     mknod(path, S_IFCHR | 0666, makedev(1, 5));
@@ -866,7 +883,6 @@ static int install_namesbar(anv_env_t *env) {
              env->rootfs, ANV_NAMESBAR);
     
     mkdir_p(env->rootfs, "/usr/bin");
-    debug_log("install_namesbar: creating at %s", namesbar_path);
     
     FILE *f = fopen(namesbar_path, "w");
     if (!f) return -1;
@@ -879,7 +895,13 @@ static int install_namesbar(anv_env_t *env) {
     fprintf(f, "export APKM_REPO='https://gsql-badge.onrender.com'\n");
     fprintf(f, "if [ -f /system/bin/su ]; then\n");
     fprintf(f, "    export PATH=/system/bin:$PATH\n");
+    fprintf(f, "    echo '[ANV] SuperSU available (try su --help)'\n");
     fprintf(f, "fi\n");
+    fprintf(f, "if [ -f /usr/bin/docker ]; then\n");
+    fprintf(f, "    echo '[ANV] Docker available (try docker ps)'\n");
+    fprintf(f, "fi\n");
+    fprintf(f, "echo '[ANV] Environment: %s (security level %d)'\n", 
+            env->name, env->security_level);
     fprintf(f, "exec /bin/sh \"$@\"\n");
     
     fclose(f);
@@ -889,7 +911,6 @@ static int install_namesbar(anv_env_t *env) {
     snprintf(sh_path, sizeof(sh_path), "%s/bin/sh", env->rootfs);
     unlink(sh_path);
     symlink(namesbar_path, sh_path);
-    debug_log("install_namesbar: done");
     
     return ANV_OK;
 }
@@ -910,7 +931,6 @@ static int save_env_config(anv_env_t *env) {
     fprintf(f, "DOCKER_ENABLED=%d\n", env->docker_enabled);
     
     fclose(f);
-    debug_log("save_env_config: saved to %s", config_path);
     return ANV_OK;
 }
 
@@ -950,7 +970,6 @@ static int load_env_config(anv_ctx_t *ctx, const char *name, anv_env_t *env) {
         fclose(f);
     }
     
-    debug_log("load_env_config: loaded %s, rootfs=%s", name, env->rootfs);
     return ANV_OK;
 }
 
@@ -962,6 +981,7 @@ void print_usage(void) {
     printf("╔══════════════════════════════════════════════════════════════╗\n");
     printf("║  ANV v%s - Advanced Namespace Virtualization                ║\n", ANV_VERSION);
     printf("║  [track backsh >_< secure environment for APKM/APSM/BOOL]   ║\n");
+    printf("║  SuperSU path: <env>/system/bin/su                          ║\n");
     printf("╚══════════════════════════════════════════════════════════════╝\n\n");
     
     printf("USAGE:\n");
@@ -980,7 +1000,7 @@ void print_usage(void) {
     printf("  0 - APKM    (Package Manager)     - Install packages\n");
     printf("  1 - BOOL    (Package Builder)     - Build packages\n");
     printf("  2 - APSM    (Package Publisher)   - Publish packages\n");
-    printf("  3 - CUSTOM  (Generic)             - Any application\n\n");
+    printf("  3 - CUSTOM  (Docker)              - Docker support\n\n");
     
     printf("SECURITY LEVELS:\n");
     printf("  0 - None     (No isolation)       - Not recommended\n");
@@ -991,25 +1011,16 @@ void print_usage(void) {
     
     printf("EXAMPLES:\n");
     printf("  anv create apkm-dev 0 3           # Create APKM environment (level 3)\n");
-    printf("  anv start apkm-dev                 # Start the environment\n");
-    printf("  anv enter apkm-dev                  # Enter (prompt: [::apkm-dev::]user@host:~$)\n");
-    printf("  anv stop apkm-dev                   # Stop the environment\n");
-    printf("  anv delete apkm-dev                  # Delete the environment\n\n");
+    printf("  anv create docker-test 3 3        # Create Docker environment (level 3)\n");
+    printf("  anv start docker-test               # Start the environment\n");
+    printf("  anv enter docker-test                # Enter (prompt: [::docker-test::]user@host:~$)\n");
+    printf("  anv stop docker-test                 # Stop the environment\n");
+    printf("  anv delete docker-test                # Delete the environment\n\n");
 }
 
 int main(int argc, char *argv[]) {
-    // Ouvrir le fichier de log
-    log_file = fopen("/tmp/anv-debug.log", "w");
-    if (log_file) {
-        fprintf(log_file, "ANV debug log started\n");
-        fflush(log_file);
-    }
-    
-    debug_log("main: starting with %d args", argc);
-    
     if (argc < 2) {
         print_usage();
-        if (log_file) fclose(log_file);
         return 0;
     }
     
@@ -1021,44 +1032,39 @@ int main(int argc, char *argv[]) {
     if (strcmp(argv[1], "create") == 0) {
         if (argc < 3) {
             printf("❌ Missing environment name\n");
-            result = 1;
-        } else {
-            int type = (argc >= 4) ? atoi(argv[3]) : ANV_TYPE_APKM;
-            int security = (argc >= 5) ? atoi(argv[4]) : ANV_SEC_HIGH;
-            result = anv_create(&ctx, argv[2], type, security);
+            return 1;
         }
+        int type = (argc >= 4) ? atoi(argv[3]) : ANV_TYPE_APKM;
+        int security = (argc >= 5) ? atoi(argv[4]) : ANV_SEC_HIGH;
+        result = anv_create(&ctx, argv[2], type, security);
     }
     else if (strcmp(argv[1], "start") == 0) {
         if (argc < 3) {
             printf("❌ Missing environment name\n");
-            result = 1;
-        } else {
-            result = anv_start(&ctx, argv[2]);
+            return 1;
         }
+        result = anv_start(&ctx, argv[2]);
     }
     else if (strcmp(argv[1], "enter") == 0) {
         if (argc < 3) {
             printf("❌ Missing environment name\n");
-            result = 1;
-        } else {
-            result = anv_enter(&ctx, argv[2], NULL);
+            return 1;
         }
+        result = anv_enter(&ctx, argv[2], NULL);
     }
     else if (strcmp(argv[1], "stop") == 0) {
         if (argc < 3) {
             printf("❌ Missing environment name\n");
-            result = 1;
-        } else {
-            result = anv_stop(&ctx, argv[2]);
+            return 1;
         }
+        result = anv_stop(&ctx, argv[2]);
     }
     else if (strcmp(argv[1], "delete") == 0) {
         if (argc < 3) {
             printf("❌ Missing environment name\n");
-            result = 1;
-        } else {
-            result = anv_delete(&ctx, argv[2]);
+            return 1;
         }
+        result = anv_delete(&ctx, argv[2]);
     }
     else if (strcmp(argv[1], "list") == 0) {
         result = anv_list(&ctx);
@@ -1072,7 +1078,5 @@ int main(int argc, char *argv[]) {
         result = 1;
     }
     
-    debug_log("main: exiting with %d", result);
-    if (log_file) fclose(log_file);
     return result;
 }
