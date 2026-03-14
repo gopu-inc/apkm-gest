@@ -2,7 +2,7 @@
 #include <libgen.h>
 #include <wordexp.h>
 #include <sys/statvfs.h>
-
+#include <sys/sysmacros.h>
 // ============================================================================
 // DÉTECTION ROOT ET MESSAGES DE SÉCURITÉ
 // ============================================================================

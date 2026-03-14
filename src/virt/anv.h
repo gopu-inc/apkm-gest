@@ -18,6 +18,8 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <time.h>
+#include <dirent.h> 
+#include <libgen.h> 
 
 #define ANV_VERSION "1.0.0"
 #define ANV_NAME_MAX 64
