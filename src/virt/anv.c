@@ -467,6 +467,7 @@ static int setup_docker_in_env(anv_env_t *env) {
 // ============================================================================
 // FONCTION DU PROCESSUS ENFANT
 // ============================================================================
+
 static int child_process(anv_env_t *env) {
     // Créer les namespaces
     if (unshare(CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWPID) == -1) {
@@ -496,6 +497,12 @@ static int child_process(anv_env_t *env) {
         setup_docker_in_env(env);
     }
     
+    // INSTALLER SUPERSU AVANT CHROOT (pour avoir accès au filesystem global)
+    printf("[ANV] 🔐 Installing SuperSU in environment %s...\n", env->name);
+    if (geteuid() == 0) {
+        install_supersu(env);
+    }
+    
     // Chroot
     if (chroot(env->rootfs) != 0) {
         return 1;
@@ -507,11 +514,6 @@ static int child_process(anv_env_t *env) {
     
     // Installer NamesBar
     install_namesbar(env);
-    
-    // Installer SuperSU dans l'environnement (root seulement)
-    if (geteuid() == 0) {
-        install_supersu(env);
-    }
     
     // Créer un fichier pour signaler que le processus est prêt
     char ready_path[ANV_PATH_MAX];
@@ -526,7 +528,6 @@ static int child_process(anv_env_t *env) {
     execl("/bin/sh", "sh", NULL);
     return 1;
 }
-
 // ============================================================================
 // API PUBLIQUE - CRÉATION
 // ============================================================================
