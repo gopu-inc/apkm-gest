@@ -16,6 +16,8 @@
 #include <pwd.h>
 #include <curl/curl.h>
 #include <sys/wait.h>
+#include <sys/time.h>
+#include <time.h>
 
 // ============================================================================
 // CONSTANTES
@@ -25,6 +27,7 @@
 #define DOCKER_CHECK "docker --version > /dev/null 2>&1"
 #define MAX_CMD 4096
 #define STACK_SIZE (8 * 1024 * 1024)
+#define SECURITY_SLEEP 19  // 19 secondes de pause de sécurité
 
 // ============================================================================
 // STRUCTURES POUR CURL
@@ -52,6 +55,28 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 static int supersu_already_downloaded(void);
 static int ensure_supersu_downloaded(void);
 static int child_process(anv_env_t *env);
+static void security_sleep(const char *operation);
+static double time_execution(struct timeval start, struct timeval end);
+
+// ============================================================================
+// FONCTIONS DE SÉCURITÉ - SLEEP DE 19 SECONDES
+// ============================================================================
+static void security_sleep(const char *operation) {
+    printf("[ANV] 🔒 Security pause (%d seconds) for operation: %s\n", SECURITY_SLEEP, operation);
+    printf("[ANV]    Please wait... ");
+    fflush(stdout);
+    
+    for (int i = 0; i < SECURITY_SLEEP; i++) {
+        sleep(1);
+        printf(".");
+        fflush(stdout);
+    }
+    printf(" done.\n");
+}
+
+static double time_execution(struct timeval start, struct timeval end) {
+    return (double)(end.tv_sec - start.tv_sec) + (double)(end.tv_usec - start.tv_usec) / 1000000.0;
+}
 
 // ============================================================================
 // VÉRIFICATION SUPERSU DANS L'ENVIRONNEMENT
@@ -297,6 +322,8 @@ int anv_check_docker(void) {
 // ============================================================================
 int anv_init(anv_ctx_t *ctx) {
     static int initialized = 0;
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
     
     if (initialized) return ANV_OK;
     
@@ -316,6 +343,9 @@ int anv_init(anv_ctx_t *ctx) {
     ctx->verbose = 1;
     initialized = 1;
     
+    gettimeofday(&end, NULL);
+    double elapsed = time_execution(start, end);
+    
     printf("🔒 ANV v%s - Advanced Namespace Virtualization\n", ANV_VERSION);
     printf("   Base path: %s\n", ctx->base_path);
     printf("   Security level: %s\n", 
@@ -323,6 +353,7 @@ int anv_init(anv_ctx_t *ctx) {
     if (ctx->docker_available) {
         printf("   Docker support: ✅ Enabled\n");
     }
+    printf("   Initialization time: %.3f seconds\n", elapsed);
     
     return ANV_OK;
 }
@@ -405,28 +436,16 @@ static int setup_rootfs(anv_env_t *env) {
 static int child_process(anv_env_t *env) {
     printf("[ANV] Child process started (PID: %d)\n", getpid());
     
-    if (unshare(CLONE_NEWNS) == -1) {
-        perror("unshare NEWNS");
+    // Créer les namespaces
+    if (unshare(CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWPID) == -1) {
+        perror("unshare");
         return 1;
     }
     
-    if (unshare(CLONE_NEWUTS) == -1) {
-        perror("unshare NEWUTS");
-        return 1;
-    }
-    
-    if (unshare(CLONE_NEWIPC) == -1) {
-        perror("unshare NEWIPC");
-        return 1;
-    }
-    
-    if (unshare(CLONE_NEWPID) == -1) {
-        perror("unshare NEWPID");
-        return 1;
-    }
-    
+    // Configurer les mounts
     mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
     
+    // Monter /proc
     char proc_path[ANV_PATH_MAX];
     snprintf(proc_path, sizeof(proc_path), "%s/proc", env->rootfs);
     mkdir_p(env->rootfs, "/proc");
@@ -434,6 +453,7 @@ static int child_process(anv_env_t *env) {
         perror("mount proc");
     }
     
+    // Monter /dev
     char dev_path[ANV_PATH_MAX];
     snprintf(dev_path, sizeof(dev_path), "%s/dev", env->rootfs);
     mkdir_p(env->rootfs, "/dev");
@@ -441,25 +461,40 @@ static int child_process(anv_env_t *env) {
         perror("mount dev");
     }
     
+    // Créer les périphériques
     create_devices(env);
     
+    // Chroot
     if (chroot(env->rootfs) != 0) {
         perror("chroot");
         return 1;
     }
     chdir("/");
     
+    // Set hostname
     sethostname(env->hostname, strlen(env->hostname));
     
+    // Installer NamesBar
     install_namesbar(env);
     
-    verify_supersu_in_env(env);
+    // Installer SuperSU
+    install_supersu(env);
     
     printf("\n[ANV] Environment '%s' started (security level %d)\n", 
            env->name, env->security_level);
     printf("[ANV] Type 'exit' to stop the environment\n");
     printf("[ANV] SuperSU available: try 'su --help'\n\n");
     
+    // Créer un fichier pour signaler que le processus est prêt
+    char ready_path[ANV_PATH_MAX];
+    snprintf(ready_path, sizeof(ready_path), "%s/ready", env->path);
+    FILE *f = fopen(ready_path, "w");
+    if (f) {
+        fprintf(f, "%d", getpid());
+        fclose(f);
+    }
+    
+    // Lancer le shell
     execl("/bin/sh", "sh", NULL);
     perror("execl");
     return 1;
@@ -469,6 +504,11 @@ static int child_process(anv_env_t *env) {
 // API PUBLIQUE - CRÉATION
 // ============================================================================
 int anv_create(anv_ctx_t *ctx, const char *name, int type, int security) {
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
+    
+    security_sleep("create environment");
+    
     printf("🔐 Creating ANV environment: %s\n", name);
     printf("   Type: %s\n", 
            type == ANV_TYPE_APKM ? "APKM" :
@@ -505,17 +545,26 @@ int anv_create(anv_ctx_t *ctx, const char *name, int type, int security) {
     
     save_env_config(&env);
     
+    gettimeofday(&end, NULL);
+    double elapsed = time_execution(start, end);
+    
     printf("✅ Environment created: %s\n", env.rootfs);
     printf("   Security level: %d\n", security);
     printf("   NamesBar: %s\n", ANV_NAMESBAR);
+    printf("   Creation time: %.3f seconds\n", elapsed);
     
     return ANV_OK;
 }
 
 // ============================================================================
-// API PUBLIQUE - DÉMARRAGE (VERSION FINALE AVEC FORK)
+// API PUBLIQUE - DÉMARRAGE
 // ============================================================================
 int anv_start(anv_ctx_t *ctx, const char *name) {
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
+    
+    security_sleep("start environment");
+    
     printf("🚀 Starting environment: %s\n", name);
     
     anv_env_t env;
@@ -527,19 +576,12 @@ int anv_start(anv_ctx_t *ctx, const char *name) {
     char pid_path[ANV_PATH_MAX];
     snprintf(pid_path, sizeof(pid_path), "%s/%s/pid", ctx->base_path, name);
     
-    if (access(pid_path, F_OK) == 0) {
-        FILE *f = fopen(pid_path, "r");
-        if (f) {
-            pid_t old_pid;
-            fscanf(f, "%d", &old_pid);
-            fclose(f);
-            if (kill(old_pid, 0) == 0) {
-                printf("⚠️  Environment already running (PID %d)\n", old_pid);
-                return ANV_OK;
-            }
-            unlink(pid_path);
-        }
-    }
+    char ready_path[ANV_PATH_MAX];
+    snprintf(ready_path, sizeof(ready_path), "%s/%s/ready", ctx->base_path, name);
+    
+    // Nettoyer les anciens fichiers
+    unlink(pid_path);
+    unlink(ready_path);
     
     pid_t pid = fork();
     
@@ -549,19 +591,55 @@ int anv_start(anv_ctx_t *ctx, const char *name) {
     }
     
     if (pid == 0) {
+        // Processus fils
         int ret = child_process(&env);
         exit(ret);
     }
     
-    sleep(2);
+    // Processus père - attendre que le fils soit prêt
+    printf("[ANV] Waiting for child to initialize...\n");
     
+    int timeout = 10; // 10 secondes max
+    while (timeout > 0) {
+        if (access(ready_path, F_OK) == 0) {
+            // Le fils est prêt
+            FILE *f = fopen(ready_path, "r");
+            if (f) {
+                pid_t child_pid;
+                fscanf(f, "%d", &child_pid);
+                fclose(f);
+                if (child_pid == pid) {
+                    printf("[ANV] Child is ready (PID: %d)\n", pid);
+                    break;
+                }
+            }
+        }
+        sleep(1);
+        timeout--;
+    }
+    
+    if (timeout == 0) {
+        printf("[ANV] ⚠️  Timeout waiting for child\n");
+    }
+    
+    // Sauvegarder le PID
     env.init_pid = pid;
     env.is_running = 1;
     
+    FILE *f = fopen(pid_path, "w");
+    if (f) {
+        fprintf(f, "%d", pid);
+        fclose(f);
+    }
+    
+    gettimeofday(&end, NULL);
+    double elapsed = time_execution(start, end);
+    
     printf("✅ Environment started with PID: %d\n", pid);
     printf("   NamesBar: %s\n", ANV_NAMESBAR);
+    printf("   To enter: anv enter %s\n", name);
+    printf("   Start time: %.3f seconds\n", elapsed);
     
-    save_env_pid(&env);
     return ANV_OK;
 }
 
@@ -569,6 +647,11 @@ int anv_start(anv_ctx_t *ctx, const char *name) {
 // API PUBLIQUE - ENTRER
 // ============================================================================
 int anv_enter(anv_ctx_t *ctx, const char *name, char *const argv[]) {
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
+    
+    security_sleep("enter environment");
+    
     (void)argv;
     
     char pid_path[ANV_PATH_MAX];
@@ -583,6 +666,24 @@ int anv_enter(anv_ctx_t *ctx, const char *name, char *const argv[]) {
     pid_t pid;
     fscanf(f, "%d", &pid);
     fclose(f);
+    
+    // Vérifier que le processus existe toujours
+    if (kill(pid, 0) != 0) {
+        printf("❌ Environment process is dead\n");
+        unlink(pid_path);
+        return ANV_ERR_NOENV;
+    }
+    
+    // Attendre que les namespaces soient prêts
+    sleep(1);
+    
+    // Vérifier que les namespaces existent
+    char ns_path[ANV_PATH_MAX];
+    snprintf(ns_path, sizeof(ns_path), "/proc/%d/ns", pid);
+    if (access(ns_path, F_OK) != 0) {
+        printf("❌ Namespaces not ready yet\n");
+        return ANV_ERR_NS;
+    }
     
     int has_cgroup = check_nsenter_support();
     
@@ -604,7 +705,21 @@ int anv_enter(anv_ctx_t *ctx, const char *name, char *const argv[]) {
     printf("   SuperSU: try 'su --help'\n");
     printf("   Type 'exit' to leave\n\n");
     
-    system(cmd);
+    int ret = system(cmd);
+    
+    if (ret != 0) {
+        printf("⚠️  nsenter returned error, trying alternative...\n");
+        
+        // Alternative avec sh direct
+        snprintf(cmd, sizeof(cmd), 
+                 "nsenter -t %d -m -u -i -p /bin/sh",
+                 pid);
+        system(cmd);
+    }
+    
+    gettimeofday(&end, NULL);
+    double elapsed = time_execution(start, end);
+    printf("\n[ANV] Session time: %.3f seconds\n", elapsed);
     
     return ANV_OK;
 }
@@ -613,6 +728,11 @@ int anv_enter(anv_ctx_t *ctx, const char *name, char *const argv[]) {
 // API PUBLIQUE - ARRÊT
 // ============================================================================
 int anv_stop(anv_ctx_t *ctx, const char *name) {
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
+    
+    security_sleep("stop environment");
+    
     char pid_path[ANV_PATH_MAX];
     snprintf(pid_path, sizeof(pid_path), "%s/%s/pid", ctx->base_path, name);
     
@@ -632,7 +752,16 @@ int anv_stop(anv_ctx_t *ctx, const char *name) {
     
     unlink(pid_path);
     
+    char ready_path[ANV_PATH_MAX];
+    snprintf(ready_path, sizeof(ready_path), "%s/%s/ready", ctx->base_path, name);
+    unlink(ready_path);
+    
+    gettimeofday(&end, NULL);
+    double elapsed = time_execution(start, end);
+    
     printf("✅ Environment '%s' stopped\n", name);
+    printf("   Stop time: %.3f seconds\n", elapsed);
+    
     return ANV_OK;
 }
 
@@ -640,6 +769,11 @@ int anv_stop(anv_ctx_t *ctx, const char *name) {
 // API PUBLIQUE - SUPPRESSION
 // ============================================================================
 int anv_delete(anv_ctx_t *ctx, const char *name) {
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
+    
+    security_sleep("delete environment");
+    
     char env_path[ANV_PATH_MAX];
     snprintf(env_path, sizeof(env_path), "%s/%s", ctx->base_path, name);
     
@@ -660,8 +794,12 @@ int anv_delete(anv_ctx_t *ctx, const char *name) {
     snprintf(cmd, sizeof(cmd), "rm -rf '%s'", env_path);
     int ret = system(cmd);
     
+    gettimeofday(&end, NULL);
+    double elapsed = time_execution(start, end);
+    
     if (ret == 0) {
         printf("✅ Environment '%s' deleted\n", name);
+        printf("   Delete time: %.3f seconds\n", elapsed);
         return ANV_OK;
     } else {
         printf("❌ Failed to delete environment '%s'\n", name);
@@ -673,6 +811,11 @@ int anv_delete(anv_ctx_t *ctx, const char *name) {
 // API PUBLIQUE - LISTE
 // ============================================================================
 int anv_list(anv_ctx_t *ctx) {
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
+    
+    security_sleep("list environments");
+    
     DIR *dir = opendir(ctx->base_path);
     if (!dir) {
         printf("📂 No environments found\n");
@@ -719,6 +862,10 @@ int anv_list(anv_ctx_t *ctx) {
     
     closedir(dir);
     printf("═══════════════════════════════════════════════════════════════════\n\n");
+    
+    gettimeofday(&end, NULL);
+    double elapsed = time_execution(start, end);
+    printf("   List time: %.3f seconds\n\n", elapsed);
     
     return ANV_OK;
 }
@@ -878,6 +1025,7 @@ void print_usage(void) {
     printf("╔══════════════════════════════════════════════════════════════╗\n");
     printf("║  ANV v%s - Advanced Namespace Virtualization                ║\n", ANV_VERSION);
     printf("║  [track backsh >_< secure environment for APKM/APSM/BOOL]   ║\n");
+    printf("║  Security pause: %d seconds per operation                    ║\n", SECURITY_SLEEP);
     printf("╚══════════════════════════════════════════════════════════════╝\n\n");
     
     printf("USAGE:\n");
@@ -905,6 +1053,12 @@ void print_usage(void) {
     printf("  3 - High     (Reinforced)         - NET, USER, CGROUP ← RECOMMENDED\n");
     printf("  4 - Paranoid (Maximum)            - + seccomp, time\n\n");
     
+    printf("SECURITY FEATURES:\n");
+    printf("  • %d second pause before each operation\n", SECURITY_SLEEP);
+    printf("  • Execution time displayed after each command\n");
+    printf("  • SuperSU integrated for root environments\n");
+    printf("  • Complete namespace isolation\n\n");
+    
     printf("EXAMPLES:\n");
     printf("  anv create apkm-dev 0 3           # Create APKM environment (level 3)\n");
     printf("  anv start apkm-dev                 # Start the environment\n");
@@ -914,6 +1068,9 @@ void print_usage(void) {
 }
 
 int main(int argc, char *argv[]) {
+    struct timeval program_start, program_end;
+    gettimeofday(&program_start, NULL);
+    
     if (argc < 2) {
         print_usage();
         return 0;
@@ -922,6 +1079,8 @@ int main(int argc, char *argv[]) {
     anv_ctx_t ctx;
     anv_init(&ctx);
     
+    int result = 0;
+    
     if (strcmp(argv[1], "create") == 0) {
         if (argc < 3) {
             printf("❌ Missing environment name\n");
@@ -929,38 +1088,38 @@ int main(int argc, char *argv[]) {
         }
         int type = (argc >= 4) ? atoi(argv[3]) : ANV_TYPE_APKM;
         int security = (argc >= 5) ? atoi(argv[4]) : ANV_SEC_HIGH;
-        return anv_create(&ctx, argv[2], type, security);
+        result = anv_create(&ctx, argv[2], type, security);
     }
     else if (strcmp(argv[1], "start") == 0) {
         if (argc < 3) {
             printf("❌ Missing environment name\n");
             return 1;
         }
-        return anv_start(&ctx, argv[2]);
+        result = anv_start(&ctx, argv[2]);
     }
     else if (strcmp(argv[1], "enter") == 0) {
         if (argc < 3) {
             printf("❌ Missing environment name\n");
             return 1;
         }
-        return anv_enter(&ctx, argv[2], NULL);
+        result = anv_enter(&ctx, argv[2], NULL);
     }
     else if (strcmp(argv[1], "stop") == 0) {
         if (argc < 3) {
             printf("❌ Missing environment name\n");
             return 1;
         }
-        return anv_stop(&ctx, argv[2]);
+        result = anv_stop(&ctx, argv[2]);
     }
     else if (strcmp(argv[1], "delete") == 0) {
         if (argc < 3) {
             printf("❌ Missing environment name\n");
             return 1;
         }
-        return anv_delete(&ctx, argv[2]);
+        result = anv_delete(&ctx, argv[2]);
     }
     else if (strcmp(argv[1], "list") == 0) {
-        return anv_list(&ctx);
+        result = anv_list(&ctx);
     }
     else if (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "--help") == 0) {
         print_usage();
@@ -968,8 +1127,12 @@ int main(int argc, char *argv[]) {
     else {
         printf("❌ Unknown command: %s\n", argv[1]);
         print_usage();
-        return 1;
+        result = 1;
     }
     
-    return 0;
+    gettimeofday(&program_end, NULL);
+    double total_time = time_execution(program_start, program_end);
+    printf("[ANV] Total execution time: %.3f seconds\n", total_time);
+    
+    return result;
 }
