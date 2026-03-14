@@ -101,6 +101,7 @@ find_package(ZLIB REQUIRED)
 find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
 
+# Bibliothèques standards
 pkg_check_modules(JSONC REQUIRED json-c)
 pkg_check_modules(LIBSODIUM REQUIRED libsodium)
 pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
@@ -111,7 +112,23 @@ pkg_check_modules(JANSSON REQUIRED jansson)
 pkg_check_modules(ARGON2 REQUIRED libargon2)
 pkg_check_modules(SECCOMP REQUIRED libseccomp)
 pkg_check_modules(CAP_NG REQUIRED libcap-ng)
-pkg_check_modules(BLAKE3 REQUIRED libblake3)
+
+# Recherche de libcap (pour les capabilities)
+find_library(LIBCAP_LIBRARY NAMES cap)
+if(LIBCAP_LIBRARY)
+    message(STATUS "Found libcap: ${LIBCAP_LIBRARY}")
+    add_definitions(-DHAVE_LIBCAP)
+else()
+    message(WARNING "libcap not found, capabilities will be disabled")
+endif()
+
+# Recherche de libblake3
+find_library(BLAKE3_LIBRARY NAMES blake3)
+if(BLAKE3_LIBRARY)
+    message(STATUS "Found libblake3: ${BLAKE3_LIBRARY}")
+else()
+    message(WARNING "libblake3 not found")
+endif()
 
 # TOML (recherche manuelle)
 if(EXISTS ${TOML_LIBRARY})
@@ -144,6 +161,7 @@ set(ANV_SOURCES
 set(GET_SOURCES
     src/get/get.c
 )
+
 # Sources APKM
 set(APKM_SOURCES
     src/main.c
@@ -169,30 +187,36 @@ set(BOOL_SOURCES
 # ============================================================================
 add_library(apkm_static STATIC ${CORE_SOURCES})
 set_target_properties(apkm_static PROPERTIES 
-    OUTPUT_NAME "apkm" PREFIX "lib"
+    OUTPUT_NAME "apkm" 
+    PREFIX "lib"
     POSITION_INDEPENDENT_CODE ON
 )
 
 add_library(anv_static STATIC ${ANV_SOURCES})
-set_target_properties(apkm_static PROPERTIES 
-    OUTPUT_NAME "anv" PREFIX "lib"
+set_target_properties(anv_static PROPERTIES 
+    OUTPUT_NAME "anv" 
+    PREFIX "lib"
     POSITION_INDEPENDENT_CODE ON
 )
 
 add_library(apsm_static STATIC ${APSM_SOURCES})
 set_target_properties(apsm_static PROPERTIES 
-    OUTPUT_NAME "apsm" PREFIX "lib"
+    OUTPUT_NAME "apsm" 
+    PREFIX "lib"
     POSITION_INDEPENDENT_CODE ON
 )
 
 add_library(get_static STATIC ${GET_SOURCES}) 
 set_target_properties(get_static PROPERTIES    
-    OUTPUT_NAME "get" PREFIX "lib"             
+    OUTPUT_NAME "get" 
+    PREFIX "lib"             
     POSITION_INDEPENDENT_CODE ON
 )
+
 add_library(bool_static STATIC ${BOOL_SOURCES})
 set_target_properties(bool_static PROPERTIES 
-    OUTPUT_NAME "bool" PREFIX "lib"
+    OUTPUT_NAME "bool" 
+    PREFIX "lib"
     POSITION_INDEPENDENT_CODE ON
 )
 
@@ -201,35 +225,46 @@ set_target_properties(bool_static PROPERTIES
 # ============================================================================
 add_library(apkm_shared SHARED ${CORE_SOURCES})
 set_target_properties(apkm_shared PROPERTIES 
-    OUTPUT_NAME "apkm" PREFIX "lib"
-    VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
+    OUTPUT_NAME "apkm" 
+    PREFIX "lib"
+    VERSION ${PROJECT_VERSION} 
+    SOVERSION ${PROJECT_VERSION_MAJOR}
     POSITION_INDEPENDENT_CODE ON
 )
 
 add_library(anv_shared SHARED ${ANV_SOURCES})
-set_target_properties(apkm_shared PROPERTIES 
-    OUTPUT_NAME "anv" PREFIX "lib"
-    VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
+set_target_properties(anv_shared PROPERTIES 
+    OUTPUT_NAME "anv" 
+    PREFIX "lib"
+    VERSION ${PROJECT_VERSION} 
+    SOVERSION ${PROJECT_VERSION_MAJOR}
     POSITION_INDEPENDENT_CODE ON
 )
 
 add_library(get_shared SHARED ${GET_SOURCES}) 
 set_target_properties(get_shared PROPERTIES    
-    OUTPUT_NAME "get" PREFIX "lib"             
-    VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}    POSITION_INDEPENDENT_CODE ON                
+    OUTPUT_NAME "get" 
+    PREFIX "lib"             
+    VERSION ${PROJECT_VERSION} 
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+    POSITION_INDEPENDENT_CODE ON                
 )
 
 add_library(apsm_shared SHARED ${APSM_SOURCES})
 set_target_properties(apsm_shared PROPERTIES 
-    OUTPUT_NAME "apsm" PREFIX "lib"
-    VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
+    OUTPUT_NAME "apsm" 
+    PREFIX "lib"
+    VERSION ${PROJECT_VERSION} 
+    SOVERSION ${PROJECT_VERSION_MAJOR}
     POSITION_INDEPENDENT_CODE ON
 )
 
 add_library(bool_shared SHARED ${BOOL_SOURCES})
 set_target_properties(bool_shared PROPERTIES 
-    OUTPUT_NAME "bool" PREFIX "lib"
-    VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
+    OUTPUT_NAME "bool" 
+    PREFIX "lib"
+    VERSION ${PROJECT_VERSION} 
+    SOVERSION ${PROJECT_VERSION_MAJOR}
     POSITION_INDEPENDENT_CODE ON
 )
 
@@ -239,14 +274,15 @@ set_target_properties(bool_shared PROPERTIES
 add_executable(apkm_bin ${APKM_SOURCES})
 target_link_libraries(apkm_bin apkm_shared)
 set_target_properties(apkm_bin PROPERTIES OUTPUT_NAME "apkm")
+
 add_executable(apsm_bin ${APSM_SOURCES})
 target_link_libraries(apsm_bin apsm_shared)
 set_target_properties(apsm_bin PROPERTIES OUTPUT_NAME "apsm")
 
 add_executable(anv_bin ${ANV_SOURCES})
-target_link_libraries(anv_bin anv_shared)
+target_link_libraries(anv_bin anv_shared ${LIBCAP_LIBRARY})
 set_target_properties(anv_bin PROPERTIES OUTPUT_NAME "anv")
- 
+
 add_executable(get_bin ${GET_SOURCES})        
 target_link_libraries(get_bin apsm_shared)     
 set_target_properties(get_bin PROPERTIES OUTPUT_NAME "get")
@@ -254,17 +290,11 @@ set_target_properties(get_bin PROPERTIES OUTPUT_NAME "get")
 add_executable(bool_bin ${BOOL_SOURCES})
 target_link_libraries(bool_bin bool_shared)
 set_target_properties(bool_bin PROPERTIES OUTPUT_NAME "bool")
+
 # ============================================================================
 # LINK LIBRARIES (pour tous les targets)
 # ============================================================================
-foreach(target 
-    apkm_static apkm_shared 
-    apsm_static apsm_shared 
-    bool_static bool_shared
-    get_static get_shared
-    anv_static anv_shared
-    apkm_bin apsm_bin get_bin anv_bin bool_bin
-)
+macro(target_link_all target)
     target_link_libraries(${target}
         OpenSSL::Crypto
         ZLIB::ZLIB
@@ -280,11 +310,18 @@ foreach(target
         ${ARGON2_LDFLAGS}
         ${SECCOMP_LDFLAGS}
         ${CAP_NG_LDFLAGS}
-        ${BLAKE3_LDFLAGS}
         ${TOML_LIBRARY}
         Threads::Threads
         rt dl m
     )
+    
+    if(LIBCAP_LIBRARY)
+        target_link_libraries(${target} ${LIBCAP_LIBRARY})
+    endif()
+    
+    if(BLAKE3_LIBRARY)
+        target_link_libraries(${target} ${BLAKE3_LIBRARY})
+    endif()
     
     target_include_directories(${target} PRIVATE
         ${JSONC_INCLUDE_DIRS}
@@ -297,9 +334,20 @@ foreach(target
         ${ARGON2_INCLUDE_DIRS}
         ${SECCOMP_INCLUDE_DIRS}
         ${CAP_NG_INCLUDE_DIRS}
-        ${BLAKE3_INCLUDE_DIRS}
         ${TOML_INCLUDE_DIR}
     )
+endmacro()
+
+# Appliquer à toutes les cibles
+foreach(target 
+    apkm_static apkm_shared 
+    apsm_static apsm_shared 
+    bool_static bool_shared
+    get_static get_shared
+    anv_static anv_shared
+    apkm_bin apsm_bin get_bin anv_bin bool_bin
+)
+    target_link_all(${target})
 endforeach()
 
 # ============================================================================
@@ -309,7 +357,6 @@ install(TARGETS apkm_static apkm_shared apsm_static apsm_shared bool_static bool
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
-    
 )
 
 install(TARGETS apkm_bin anv_bin get_bin apsm_bin bool_bin
@@ -336,6 +383,11 @@ add_test(NAME apkm_help COMMAND apkm_bin --help)
 add_test(NAME apsm_help COMMAND apsm_bin help)
 add_test(NAME bool_help COMMAND bool_bin --help)
 add_test(NAME get_help COMMAND get_bin file.toml)
+
+# Test ANV
+add_test(NAME anv_help COMMAND anv_bin help)
+add_test(NAME anv_list COMMAND anv_bin list)
+
 # ============================================================================
 # PACKAGING CPACK
 # ============================================================================
@@ -387,7 +439,10 @@ message(STATUS "📚 Bibliothèques:")
 message(STATUS "   • libapkm.a + libapkm.so")
 message(STATUS "   • libapsm.a + libapsm.so")
 message(STATUS "   • libbool.a + libbool.so")
+message(STATUS "   • libanv.a + libanv.so")
 message(STATUS "")
+message(STATUS "🔧 libcap: ${LIBCAP_LIBRARY}")
+message(STATUS "🔧 libblake3: ${BLAKE3_LIBRARY}")
 message(STATUS "🔧 TOML: ${TOML_LIBRARY}")
 message(STATUS "📦 Multi-repo: ✅")
 message(STATUS "📦 SELP compression: ✅")
