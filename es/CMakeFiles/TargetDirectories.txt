@@ -1,0 +1,9 @@
+/root/shared/apkm-gest/es/CMakeFiles/apkm.dir
+/root/shared/apkm-gest/es/CMakeFiles/apsm.dir
+/root/shared/apkm-gest/es/CMakeFiles/bool.dir
+/root/shared/apkm-gest/es/CMakeFiles/edit_cache.dir
+/root/shared/apkm-gest/es/CMakeFiles/rebuild_cache.dir
+/root/shared/apkm-gest/es/CMakeFiles/list_install_components.dir
+/root/shared/apkm-gest/es/CMakeFiles/install.dir
+/root/shared/apkm-gest/es/CMakeFiles/install/local.dir
+/root/shared/apkm-gest/es/CMakeFiles/install/strip.dir

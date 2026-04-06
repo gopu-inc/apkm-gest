@@ -1,0 +1,3 @@
+/usr/local/bin/apkm
+/usr/local/bin/apsm
+/usr/local/bin/bool
